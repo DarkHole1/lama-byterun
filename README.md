@@ -5,6 +5,12 @@ make
 ./interpreter [bytecode]
 ```
 
+for analysis use flag `-a`
+
+```
+./interpreter -a [bytecode]
+```
+
 # Comparsion
 
 ```
