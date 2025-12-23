@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstring>
+#include <algorithm>
 #include "runtime/gc.h"
 
 std::vector<char> read_file(std::string fname)
@@ -1591,18 +1592,478 @@ struct Interpreter
     }
 };
 
+long get_instr_size(instr::Instr instr)
+{
+    switch (instr)
+    {
+    case instr::ADD:
+    case instr::SUB:
+    case instr::MUL:
+    case instr::DIV:
+    case instr::REM:
+    case instr::LSS:
+    case instr::LEQ:
+    case instr::GRE:
+    case instr::GEQ:
+    case instr::EQU:
+    case instr::NEQ:
+    case instr::AND:
+    case instr::OR:
+    {
+        return 1;
+    }
+    case instr::CONST:
+    case instr::STRING:
+    {
+        return 5;
+    }
+    case instr::SEXP:
+    {
+        return 9;
+    }
+    case instr::STI:
+    case instr::STA:
+    {
+        return 1;
+    }
+    case instr::JMP:
+    {
+        return 5;
+    }
+    case instr::END:
+    case instr::RET:
+    case instr::DROP:
+    case instr::DUP:
+    case instr::SWAP:
+    case instr::ELEM:
+    {
+        return 1;
+    }
+    case instr::LDG:
+    case instr::LDL:
+    case instr::LDA:
+    case instr::LDC:
+    case instr::LDGR:
+    case instr::LDLR:
+    case instr::LDAR:
+    case instr::LDCR:
+    case instr::STG:
+    case instr::STL:
+    case instr::STA_:
+    case instr::STC:
+    case instr::CJMPZ:
+    case instr::CJMPNZ:
+    {
+        return 5;
+    }
+    case instr::BEGIN:
+    case instr::CBEGIN:
+    {
+        return 9;
+    }
+    case instr::CLOSURE:
+    {
+        return -1;
+    }
+    case instr::CALLC:
+    {
+        return 5;
+    }
+    case instr::CALL:
+    case instr::TAG:
+    {
+        return 9;
+    }
+    case instr::ARRAY:
+    {
+        return 5;
+    }
+    case instr::FAIL:
+    {
+        return 9;
+    }
+    case instr::LINE:
+    {
+        return 5;
+    }
+    case instr::PATT_eq:
+    case instr::PATT_is_string:
+    case instr::PATT_is_array:
+    case instr::PATT_is_sexp:
+    case instr::PATT_is_ref:
+    case instr::PATT_is_val:
+    case instr::PATT_is_fun:
+    case instr::CALL_Lread:
+    case instr::CALL_Lwrite:
+    case instr::CALL_Llength:
+    case instr::CALL_Lstring:
+    {
+        return 1;
+    }
+    case instr::CALL_Barray:
+    {
+        return 5;
+    }
+    default:
+    {
+        return -1;
+    }
+    }
+}
+
+struct Block
+{
+    long offset_start;
+    long offset_end;
+    std::vector<char> code;
+};
+
 struct Analyser
 {
     Result result;
+    std::vector<Block> blocks;
+    std::vector<std::tuple<std::vector<char>, long>> occurencies;
 
     Analyser(Result res)
     {
         result = res;
+        blocks.push_back({
+            .offset_start = 0,
+            .offset_end = (long)res.code.size(),
+            .code = res.code,
+        });
+    }
+
+    void split_at(long l)
+    {
+        for (size_t i = 0; i < blocks.size(); i++)
+        {
+            if (blocks[i].offset_start == l)
+            {
+                return;
+            }
+            if (blocks[i].offset_start < l && blocks[i].offset_end > l)
+            {
+                blocks.push_back({
+                    .offset_start = l,
+                    .offset_end = blocks[i].offset_end,
+                    .code = std::vector<char>(blocks[i].code.begin() + (l - blocks[i].offset_start), blocks[i].code.end()),
+                });
+                blocks[i].code.resize(l - blocks[i].offset_start);
+                blocks[i].offset_end = l;
+                return;
+            }
+        }
+    }
+
+    void split_blocks()
+    {
+        auto code = result.code;
+
+        for (long ip = 0; ip < code.size(); ip++)
+        {
+            switch (code[ip])
+            {
+            case instr::ADD:
+            case instr::SUB:
+            case instr::MUL:
+            case instr::DIV:
+            case instr::REM:
+            case instr::LSS:
+            case instr::LEQ:
+            case instr::GRE:
+            case instr::GEQ:
+            case instr::EQU:
+            case instr::NEQ:
+            case instr::AND:
+            case instr::OR:
+            {
+                break;
+            }
+            case instr::CONST:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::STRING:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::SEXP:
+            {
+                ip += 8;
+                break;
+            }
+            case instr::STI:
+            case instr::STA:
+            {
+                break;
+            }
+            case instr::JMP:
+            {
+                int32_t arg;
+                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
+                ip += sizeof(arg);
+                split_at(arg);
+                break;
+            }
+            case instr::END:
+            {
+                break;
+            }
+            case instr::RET:
+            {
+                break;
+            }
+            case instr::DROP:
+            case instr::DUP:
+            case instr::SWAP:
+            case instr::ELEM:
+            {
+                break;
+            }
+            case instr::LDG:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDL:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDA:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDC:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDGR:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDLR:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDAR:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::LDCR:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::STG:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::STL:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::STA_:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::STC:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::CJMPZ:
+            {
+                int32_t arg;
+                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
+                ip += sizeof(arg);
+                split_at(arg);
+                break;
+            }
+            case instr::CJMPNZ:
+            {
+                int32_t arg;
+                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
+                ip += sizeof(arg);
+                split_at(arg);
+                break;
+            }
+            case instr::BEGIN:
+            {
+                ip += 8;
+                split_at(ip + 1);
+                break;
+            }
+            case instr::CBEGIN:
+            {
+                ip += 8;
+                split_at(ip + 1);
+                break;
+            }
+            case instr::CLOSURE:
+            {
+                const size_t _ip = ip;
+                int32_t arg1, arg2;
+                std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
+                std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
+                ip += sizeof(arg1) + sizeof(arg2);
+                ip += 5 * arg2;
+
+                split_at(arg1);
+                break;
+            }
+            case instr::CALLC:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::CALL:
+            {
+                const size_t _ip = ip;
+                int32_t arg1, arg2;
+                std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
+                std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
+                ip += sizeof(arg1) + sizeof(arg2);
+                split_at(arg1);
+                break;
+            }
+            case instr::TAG:
+            {
+                ip += 8;
+                break;
+            }
+            case instr::ARRAY:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::FAIL:
+            {
+                ip += 8;
+                break;
+            }
+            case instr::LINE:
+            {
+                ip += 4;
+                break;
+            }
+            case instr::PATT_eq:
+            case instr::PATT_is_string:
+            case instr::PATT_is_array:
+            case instr::PATT_is_sexp:
+            case instr::PATT_is_ref:
+            case instr::PATT_is_val:
+            case instr::PATT_is_fun:
+            case instr::CALL_Lread:
+            case instr::CALL_Lwrite:
+            case instr::CALL_Llength:
+            case instr::CALL_Lstring:
+            {
+                break;
+            }
+            case instr::CALL_Barray:
+            {
+                ip += 4;
+                break;
+            }
+            default:
+            {
+                std::cout << "Unknown instruction " << static_cast<long>(code[ip]) << "\n";
+                exit(1);
+            }
+            }
+        }
+    }
+
+    void add_instr(std::vector<char> instr)
+    {
+        for (long i = 0; i < occurencies.size(); i++)
+        {
+            if (std::get<0>(occurencies[i]) == instr)
+            {
+                occurencies[i] = std::tuple(std::get<0>(occurencies[i]), std::get<1>(occurencies[i]) + 1);
+                return;
+            }
+        }
+
+        occurencies.push_back(std::tuple(instr, 1));
+    }
+
+    void process_block(Block b)
+    {
+        auto code = b.code;
+        bool has_prev = false;
+        std::vector<char> prev;
+        long instr_size = 0;
+        for (long i = 0; i < code.size(); i += instr_size)
+        {
+            instr_size = get_instr_size((instr::Instr)code[i]);
+            if (instr_size <= 0)
+            {
+                switch (code[i])
+                {
+                case instr::CLOSURE:
+                    int32_t arg1, arg2;
+                    std::memcpy(&arg1, &code[i + 1], sizeof(arg1));
+                    std::memcpy(&arg2, &code[i + 1 + sizeof(arg1)], sizeof(arg2));
+                    instr_size = 9 + 5 * arg2;
+                    break;
+
+                default:
+                    std::cout << "Unknown instruction " << static_cast<long>(code[i]) << "\n";
+                    exit(1);
+                }
+            }
+
+            std::vector<char> cur = std::vector<char>(code.begin() + i, code.begin() + i + instr_size);
+            add_instr(cur);
+
+            if (has_prev)
+            {
+                std::vector<char> dcur;
+                dcur.insert(dcur.end(), prev.begin(), prev.end());
+                dcur.insert(dcur.end(), cur.begin(), cur.end());
+
+                add_instr(dcur);
+            }
+
+            prev = cur;
+            has_prev = true;
+        }
+    }
+
+    void sort_occurencies()
+    {
+        std::sort(occurencies.begin(), occurencies.end(),
+                  [](const auto &a, const auto &b)
+                  {
+                      return std::get<1>(a) > std::get<1>(b);
+                  });
     }
 
     std::vector<std::tuple<std::vector<char>, long>> analyse()
     {
-        return {};
+        split_blocks();
+
+        for (long i = 0; i < blocks.size(); i++)
+        {
+            process_block(blocks[i]);
+        }
+
+        sort_occurencies();
+
+        return occurencies;
     }
 };
 
