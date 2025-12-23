@@ -2,3 +2,4 @@
 interpreter
 .vscode
 *.code-workspace
+./build/

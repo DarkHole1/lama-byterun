@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -1590,6 +1591,34 @@ struct Interpreter
     }
 };
 
+struct Analyser
+{
+    Result result;
+
+    Analyser(Result res)
+    {
+        result = res;
+    }
+
+    std::vector<std::tuple<std::vector<char>, long>> analyse()
+    {
+        return {};
+    }
+};
+
+std::string to_hex_string(const std::vector<char> &vec)
+{
+    std::ostringstream oss;
+    oss << std::hex << std::uppercase << std::setfill('0');
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        if (i > 0)
+            oss << ' ';
+        oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(vec[i]));
+    }
+    return oss.str();
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -1603,6 +1632,7 @@ int main(int argc, char **argv)
 
     bool validate_only = false;
     bool dump_bc = false;
+    bool analyse_bc = false;
 
     if (argc >= 3)
     {
@@ -1616,6 +1646,10 @@ int main(int argc, char **argv)
         else if (flag == "-d")
         {
             dump_bc = true;
+        }
+        else if (flag == "-a")
+        {
+            analyse_bc = true;
         }
     }
     else
@@ -1636,6 +1670,21 @@ int main(int argc, char **argv)
     if (dump_bc)
     {
         dump_bytecode(result.code);
+        exit(0);
+    }
+
+    if (analyse_bc)
+    {
+        Analyser a = Analyser(result);
+        auto idioms = a.analyse();
+
+        std::cout << "Instructions sorted by occurencies:\n";
+
+        for (int i = 0; i < idioms.size(); i++)
+        {
+            std::cout << std::get<1>(idioms[i]) << "\t" << to_hex_string(std::get<0>(idioms[i])) << "\n";
+        }
+
         exit(0);
     }
 
