@@ -1,5 +1,7 @@
 #!/bin/bash
 
+ulimit -Sv 500000
+
 pushd tests
 
 for SOURCE in ./*.lama

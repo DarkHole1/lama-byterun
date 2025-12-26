@@ -2,5 +2,5 @@
 interpreter
 .vscode
 *.code-workspace
-./build/
-./test/*.output
+*.o
+*.output

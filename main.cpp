@@ -5,7 +5,48 @@
 #include <sstream>
 #include <cstring>
 #include <algorithm>
+#include <span>
 #include "runtime/gc.h"
+
+extern "C" void *Lstring(aint *args);
+extern "C" aint LtagHash(char *c);
+extern "C" char *de_hash(aint n);
+
+void assert(bool cond, std::string msg)
+{
+    if (!cond)
+    {
+        std::cout << msg << "\n";
+        exit(1);
+    }
+}
+
+void assert_with_ip(bool cond, int32_t ip, std::string msg)
+{
+    if (!cond)
+    {
+        std::cout << "[ip=" << ip << "] " << msg << "\n";
+        exit(1);
+    }
+}
+
+[[noreturn]] void unknown_instruction(int32_t ip, long name)
+{
+    std::cout << "[ip=" << ip << "] " << "Unknown instruction: " << name;
+    exit(1);
+}
+
+[[noreturn]] void not_implemented(int32_t ip, std::string name)
+{
+    std::cout << "[ip=" << ip << "] " << "Instruction not implemented: " << name;
+    exit(1);
+}
+
+[[noreturn]] void unreachable(int32_t ip)
+{
+    std::cout << "[ip=" << ip << "] " << "Unreachable code executed";
+    exit(1);
+}
 
 std::vector<char> read_file(std::string fname)
 {
@@ -16,11 +57,7 @@ std::vector<char> read_file(std::string fname)
     std::streampos length = file.tellg();
     file.seekg(0, std::ios_base::beg);
 
-    if (length <= 0)
-    {
-        std::cout << "File not exists or empty\n";
-        exit(1);
-    }
+    assert(length > 0, "File not exists or empty");
 
     std::vector<char> buffer;
     buffer.resize(length);
@@ -29,81 +66,67 @@ std::vector<char> read_file(std::string fname)
     return buffer;
 }
 
-struct Result
+struct Header
 {
     int32_t st_length;
     int32_t globals_length;
     int32_t pubs_length;
-    std::vector<std::tuple<int32_t, int32_t>> pubs;
-    std::vector<char> st;
-    std::vector<char> code;
+};
+
+struct Pub
+{
+    int32_t a, b;
+};
+
+struct Result
+{
+    Header header;
+    Pub *pubs;
+    char *st;
+    char *code;
+
+    int32_t code_size;
+    std::vector<char> bytes;
 };
 
 Result parse_and_validate(std::vector<char> bytes)
 {
     Result result = {};
+    Header header = {};
 
-    const size_t header_size = 3 * 4;
+    const size_t header_size = sizeof(Header);
 
-    if (bytes.size() < header_size)
-    {
-        std::cout << "File is too short\n";
-        exit(1);
-    }
+    assert(bytes.size() >= header_size, "File is too small");
 
-    std::memcpy(&result.st_length, &bytes[0], sizeof(result.st_length));
-    std::memcpy(&result.globals_length, &bytes[4], sizeof(result.st_length));
-    std::memcpy(&result.pubs_length, &bytes[8], sizeof(result.pubs_length));
+    std::memcpy(&header, &bytes[0], sizeof(header));
 
-    if (result.st_length < 0 || result.globals_length < 0 || result.pubs_length < 0)
-    {
-        std::cout << "Invalid header\n";
-        exit(1);
-    }
+    assert(header.st_length >= 0 && header.globals_length >= 0 && header.pubs_length >= 0,
+           "Invalid header");
 
-    if (bytes.size() < header_size + result.pubs_length * 2 * 4 + result.st_length)
-    {
-        std::cout << "File too small\n";
-        exit(1);
-    }
+    const size_t file_size = header_size + header.pubs_length * sizeof(Pub) + header.st_length;
+
+    assert(bytes.size() > file_size, "File is too small or header is invalid");
+
+    result.header = header;
 
     const size_t pubs_offset = header_size;
+    result.pubs = reinterpret_cast<Pub *>(&bytes[pubs_offset]);
 
-    result.pubs.reserve(result.pubs_length);
-
-    for (int32_t i = 0; i < result.pubs_length; i++)
+    for (int32_t i = 0; i < header.pubs_length; i++)
     {
-        const size_t first_field = pubs_offset + i * 2 * 4;
-        const size_t second_field = pubs_offset + (i * 2 + 1) * 4;
-
-        int32_t first_field_value;
-        int32_t second_field_value;
-
-        std::memcpy(&first_field_value, &bytes[first_field], sizeof(first_field_value));
-        std::memcpy(&second_field_value, &bytes[second_field], sizeof(second_field_value));
-
-        if (first_field_value < 0 || second_field_value < 0)
-        {
-            std::cout << "Unexpected value in pubs table\n";
-            exit(1);
-        }
-
-        result.pubs.push_back(std::tuple(first_field_value, second_field_value));
+        Pub pub = result.pubs[i];
+        assert(pub.a >= 0 && pub.b >= 0, "Unexpected negative value in pubs table");
     }
 
-    const size_t st_offset = pubs_offset + result.pubs_length * 2 * 4;
+    const size_t st_offset = pubs_offset + header.pubs_length * sizeof(Pub);
+    result.st = &bytes[st_offset];
 
-    result.st = {
-        &bytes[st_offset],
-        &bytes[st_offset + result.st_length],
-    };
+    const size_t code_offset = st_offset + header.st_length;
+    result.code_size = bytes.size() - code_offset;
+    assert(result.code_size > 0, "Empty code section");
+    result.code = &bytes[code_offset];
 
-    const size_t code_offset = st_offset + result.st_length;
-
-    result.code = {
-        &bytes[code_offset],
-        &bytes[bytes.size() - 1],
-    };
+    result.bytes = std::move(bytes);
 
     return result;
 }
@@ -176,10 +199,19 @@ namespace instr
     };
 }
 
-void dump_bytecode(std::vector<char> code)
+void dump_bytecode(char *code, int32_t code_size)
 {
-    for (size_t ip = 0; ip < code.size(); ip++)
+    for (int32_t ip = 0; ip < code_size; ip++)
     {
+        auto read_i32 = [&]()
+        {
+            int32_t arg;
+            assert_with_ip(ip + 1 + sizeof(int32_t) < code_size, ip, "Unexpected end of file reading argument");
+            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
+            ip += sizeof(arg);
+            return arg;
+        };
+
         switch (code[ip])
         {
         case instr::ADD:
@@ -250,28 +282,21 @@ void dump_bytecode(std::vector<char> code)
         case instr::CONST:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CONST " << arg << "\n";
             break;
         }
         case instr::STRING:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "STRING " << arg << "\n";
             break;
         }
         case instr::SEXP:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "SEXP " << arg1 << " " << arg2 << "\n";
             break;
         }
@@ -288,9 +313,7 @@ void dump_bytecode(std::vector<char> code)
         case instr::JMP:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "JMP " << arg << "\n";
             break;
         }
@@ -327,156 +350,119 @@ void dump_bytecode(std::vector<char> code)
         case instr::LDG:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDG " << arg << "\n";
             break;
         }
         case instr::LDL:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDL " << arg << "\n";
             break;
         }
         case instr::LDA:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDA " << arg << "\n";
             break;
         }
         case instr::LDC:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDC " << arg << "\n";
             break;
         }
         case instr::LDGR:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDGR " << arg << "\n";
             break;
         }
         case instr::LDLR:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDLR " << arg << "\n";
             break;
         }
         case instr::LDAR:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDAR " << arg << "\n";
             break;
         }
         case instr::LDCR:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LDCR " << arg << "\n";
             break;
         }
         case instr::STG:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "STG " << arg << "\n";
             break;
         }
         case instr::STL:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "STL " << arg << "\n";
             break;
         }
         case instr::STA_:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "STA_ " << arg << "\n";
             break;
         }
         case instr::STC:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "STC " << arg << "\n";
             break;
         }
         case instr::CJMPZ:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CJMPZ " << arg << "\n";
             break;
         }
         case instr::CJMPNZ:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CJMPNZ " << arg << "\n";
             break;
         }
         case instr::BEGIN:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "BEGIN " << arg1 << " " << arg2 << "\n";
             break;
         }
         case instr::CBEGIN:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CBEGIN " << arg1 << " " << arg2 << "\n";
             break;
         }
         case instr::CLOSURE:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
 
             std::cout << std::hex << _ip << std::dec << " " << "CLOSURE " << arg1 << " " << arg2;
 
@@ -512,57 +498,42 @@ void dump_bytecode(std::vector<char> code)
         case instr::CALLC:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CALLC " << std::hex << arg << std::dec << "\n";
             break;
         }
         case instr::CALL:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CALL " << std::hex << arg1 << std::dec << " " << arg2 << "\n";
             break;
         }
         case instr::TAG:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "TAG " << arg1 << arg2 << "\n";
             break;
         }
         case instr::ARRAY:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "ARRAY " << arg << "\n";
             break;
         }
         case instr::FAIL:
         {
             const size_t _ip = ip;
-            int32_t arg1, arg2;
-            std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-            std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-            ip += sizeof(arg1) + sizeof(arg2);
+            int32_t arg1 = read_i32(), arg2 = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "FAIL " << arg1 << " " << arg2 << "\n";
             break;
         }
         case instr::LINE:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "LINE " << arg << "\n";
             break;
         }
@@ -624,16 +595,14 @@ void dump_bytecode(std::vector<char> code)
         case instr::CALL_Barray:
         {
             const size_t _ip = ip;
-            int32_t arg;
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
+            int32_t arg = read_i32();
             std::cout << std::hex << _ip << std::dec << " " << "CALL_Barray " << arg << "\n";
             break;
         }
         default:
         {
-            std::cout << "Unknown instruction " << static_cast<long>(code[ip]) << "\n";
-            exit(1);
+            std::cout << std::hex << ip << std::dec << " " << "UNK\n";
+            break;
         }
         }
     }
@@ -647,6 +616,8 @@ struct SFrame
     size_t prev_ip;
     size_t prev_base;
     size_t prev_args;
+    size_t prev_locals;
+    size_t prev_captured;
     bool is_closure;
 };
 
@@ -690,7 +661,7 @@ void stringify(std::ostream &s, aint v)
             break;
 
         case SEXP:
-            s << reinterpret_cast<const char *>(TO_SEXP(v)->tag);
+            s << de_hash(TO_SEXP(v)->tag);
             auto n = LEN(TO_DATA(v)->data_header);
 
             if (n > 0)
@@ -717,6 +688,10 @@ void stringify(std::ostream &s, aint v)
 
 struct Interpreter
 {
+    // Approx ~4 MiB
+    const size_t STACK_MAX_SIZE = 1024 * 1024;
+    const size_t CALL_STACK_MAX_SIZE = 2048;
+
     Result result;
     std::vector<aint> stack;
     std::vector<SFrame> frames;
@@ -724,62 +699,55 @@ struct Interpreter
     size_t ip;
     size_t base;
     size_t args;
+    size_t locals;
+    size_t captured;
     bool is_closure;
+
+    int32_t get_code_size()
+    {
+        return result.code_size;
+    }
 
     int32_t read_i32()
     {
-        if (this->result.code.size() < this->ip + 4)
-        {
-            std::cout << "Unexpected file end";
-            exit(1);
-        }
+        assert(get_code_size() >= ip + sizeof(int32_t), "Unexpected file end while reading instruction arg");
 
-        int32_t result;
-        auto v = &this->result.code[this->ip];
-        std::memcpy(&result, &this->result.code[this->ip], sizeof(int32_t));
-        this->ip += 4;
-        return result;
+        int32_t res;
+        std::memcpy(&res, &result.code[ip], sizeof(int32_t));
+        ip += 4;
+        return res;
     }
 
     aint pop()
     {
-        if (__gc_stack_bottom == __gc_stack_top)
-        {
-            std::cout << "Stack empty\n";
-            exit(1);
-        }
-        aint res = this->stack.back();
-        stack.pop_back();
-        __gc_stack_top = stack.data();
-        __gc_stack_bottom = stack.data() + stack.size();
-        return res;
+        assert_with_ip(__gc_stack_bottom != __gc_stack_top, ip, "Failed to pop value: stack empty");
+        __gc_stack_bottom = reinterpret_cast<aint *>(__gc_stack_bottom) - 1;
+        return *reinterpret_cast<aint *>(__gc_stack_bottom);
     }
 
     void push(aint v)
     {
-        this->stack.push_back(v);
-        __gc_stack_top = stack.data();
-        __gc_stack_bottom = stack.data() + stack.size();
+        assert_with_ip(reinterpret_cast<aint *>(__gc_stack_bottom) < stack.data() + stack.size(), ip, "Failed to push value: stack overflow");
+        *reinterpret_cast<aint *>(__gc_stack_bottom) = v;
+        __gc_stack_bottom = reinterpret_cast<aint *>(__gc_stack_bottom) + 1;
     }
 
     int interpret()
     {
-        std::vector<char> code = this->result.code;
+        auto code = result.code;
 
-        this->frames.push_back(SFrame{
+        frames.push_back(SFrame{
             .prev_ip = 0,
             .prev_base = 0,
             .prev_args = 0,
+            .prev_locals = 0,
+            .prev_captured = 0,
             .is_closure = false,
         });
 
         while (true)
         {
-            if (ip >= code.size())
-            {
-                std::cout << "Unexpected file end";
-                exit(1);
-            }
+            assert(ip < get_code_size() && ip >= 0, "Tried to read instruction outside of bytecode");
             char instr = code[ip];
             ip++;
             switch (instr)
@@ -788,11 +756,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX(UNBOX(lhs) + UNBOX(rhs)));
                 break;
             }
@@ -800,11 +764,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX(UNBOX(lhs) - UNBOX(rhs)));
                 break;
             }
@@ -812,11 +772,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX(UNBOX(lhs) * UNBOX(rhs)));
                 break;
             }
@@ -824,16 +780,8 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
-                if (UNBOX(rhs) == 0)
-                {
-                    std::cout << "Division by zero\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
+                assert_with_ip(UNBOX(rhs) != 0, ip, "Division by zero");
                 push(BOX(UNBOX(lhs) / UNBOX(rhs)));
                 break;
             }
@@ -841,16 +789,8 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
-                if (UNBOX(rhs) == 0)
-                {
-                    std::cout << "Remainder from zero\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
+                assert_with_ip(UNBOX(rhs) != 0, ip, "Remainder zero");
                 push(BOX(UNBOX(lhs) % UNBOX(rhs)));
                 break;
             }
@@ -858,11 +798,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) < UNBOX(rhs)) ? 1 : 0));
                 break;
             }
@@ -870,11 +806,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) <= UNBOX(rhs)) ? 1 : 0));
                 break;
             }
@@ -882,11 +814,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) > UNBOX(rhs)) ? 1 : 0));
                 break;
             }
@@ -894,11 +822,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) >= UNBOX(rhs)) ? 1 : 0));
                 break;
             }
@@ -906,30 +830,14 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) && !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    push(BOX(0));
-                }
-                else
-                {
-                    push(BOX((UNBOX(lhs) == UNBOX(rhs)) ? 1 : 0));
-                }
+                push(BOX(lhs == rhs ? 1 : 0));
                 break;
             }
             case instr::NEQ:
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) != UNBOX(rhs)) ? 1 : 0));
                 break;
             }
@@ -937,11 +845,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) != 0 && UNBOX(rhs) != 0) ? 1 : 0));
                 break;
             }
@@ -949,11 +853,7 @@ struct Interpreter
             {
                 auto rhs = pop();
                 auto lhs = pop();
-                if (!UNBOXED(rhs) || !UNBOXED(lhs))
-                {
-                    std::cout << "Arguments not integers\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(rhs) && UNBOXED(lhs), ip, "Arguments not integers");
                 push(BOX((UNBOX(lhs) != 0 || UNBOX(rhs) != 0) ? 1 : 0));
                 break;
             }
@@ -965,8 +865,9 @@ struct Interpreter
             }
             case instr::STRING:
             {
-                auto v = this->read_i32();
-                std::string_view sv = &this->result.st.at(v);
+                auto v = read_i32();
+                assert_with_ip(v < result.header.st_length, ip, "String index out of table");
+                std::string_view sv = &result.st[v];
                 void *v_ = get_object_content_ptr(alloc_string(sv.length()));
                 push(reinterpret_cast<aint>(v_));
                 strcpy(TO_DATA(v_)->contents, sv.data());
@@ -976,10 +877,11 @@ struct Interpreter
             {
                 int32_t s = read_i32();
                 int32_t n = read_i32();
-                std::string_view tag = &this->result.st.at(s);
+                assert_with_ip(s < result.header.st_length, ip, "String index out of table");
+                char *tag = &result.st[s];
                 auto *v = get_object_content_ptr(alloc_sexp(n));
 
-                TO_SEXP(v)->tag = reinterpret_cast<auint>(tag.data());
+                TO_SEXP(v)->tag = UNBOX(LtagHash(tag));
 
                 for (int32_t i = n - 1; i >= 0; i--)
                 {
@@ -993,8 +895,7 @@ struct Interpreter
             }
             case instr::STI:
             {
-                std::cout << "Not implemented\n";
-                exit(1);
+                not_implemented(ip, "STI");
             }
             case instr::STA:
             {
@@ -1002,50 +903,29 @@ struct Interpreter
                 auto idx_v = pop();
                 auto agg = pop();
 
-                if (UNBOXED(agg))
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
+                assert_with_ip(!UNBOXED(agg), ip, "Not aggregate");
                 auto tag = get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(agg)));
-                if (tag != ARRAY && tag != STRING && tag != SEXP)
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
-                if (!UNBOXED(idx_v))
-                {
-                    std::cout << "Not int\n";
-                    exit(1);
-                }
+                assert_with_ip(tag == ARRAY || tag == STRING || tag == SEXP, ip, "Not aggregate");
+                assert_with_ip(UNBOXED(idx_v), ip, "Index not integer");
 
                 auto idx = UNBOX(idx_v);
                 auto agg_ = TO_DATA(agg);
                 aint len = static_cast<aint>(LEN(TO_DATA(agg)->data_header));
-                if (idx < 0 || idx >= len)
-                {
-                    std::cout << "Index outside of range\n";
-                    exit(1);
-                }
+                assert_with_ip(idx >= 0 && idx < len, ip, "Index outside of range");
                 switch (tag)
                 {
                 case ARRAY:
                     reinterpret_cast<aint *>(agg_->contents)[idx] = v;
                     break;
                 case STRING:
-                    if (!UNBOXED(v) || UNBOX(v) < 0 || UNBOX(v) > 0xff)
-                    {
-                        std::cout << "Can't assign value to string\n";
-                        exit(1);
-                    }
+                    assert_with_ip(UNBOXED(v) && v >= 0 && v <= 0xff, ip, "Can't assign value to string");
                     agg_->contents[idx] = UNBOX(v);
                     break;
                 case SEXP:
                     TO_SEXP(agg_)->contents[idx] = v;
                     break;
                 default:
-                    std::cout << "Unreachable code\n";
-                    exit(1);
+                    unreachable(ip);
                 }
                 push(v);
                 break;
@@ -1053,7 +933,8 @@ struct Interpreter
             case instr::JMP:
             {
                 int32_t offset = read_i32();
-                this->ip = offset;
+                assert_with_ip(offset >= 0 && offset < get_code_size(), ip, "Tried to jump outside of code");
+                ip = offset;
                 break;
             }
             case instr::END:
@@ -1061,9 +942,7 @@ struct Interpreter
             {
                 SFrame f = frames.back();
                 aint v = pop();
-                stack.resize(this->base - this->args - (this->is_closure ? 1 : 0));
-                __gc_stack_top = stack.data();
-                __gc_stack_bottom = stack.data() + stack.size();
+                __gc_stack_bottom = reinterpret_cast<aint *>(__gc_stack_top) + base - args - (is_closure ? 1 : 0);
 
                 push(v);
 
@@ -1072,10 +951,12 @@ struct Interpreter
                     return 0;
                 }
 
-                this->ip = f.prev_ip;
-                this->base = f.prev_base;
-                this->args = f.prev_args;
-                this->is_closure = f.is_closure;
+                ip = f.prev_ip;
+                base = f.prev_base;
+                args = f.prev_args;
+                locals = f.prev_locals;
+                captured = f.prev_captured;
+                is_closure = f.is_closure;
                 frames.pop_back();
 
                 break;
@@ -1108,22 +989,10 @@ struct Interpreter
                 aint idx_v = pop();
                 aint agg = pop();
 
-                if (UNBOXED(agg))
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
+                assert_with_ip(!UNBOXED(agg), ip, "Not aggregate");
                 auto tag = get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(agg)));
-                if (tag != ARRAY && tag != STRING && tag != SEXP)
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
-                if (!UNBOXED(idx_v))
-                {
-                    std::cout << "Not int\n";
-                    exit(1);
-                }
+                assert_with_ip(tag == ARRAY || tag == STRING || tag == SEXP, ip, "Not aggregate");
+                assert_with_ip(UNBOXED(idx_v), ip, "Index not integer");
 
                 auto idx = UNBOX(idx_v);
                 auto agg_ = TO_DATA(agg);
@@ -1148,8 +1017,7 @@ struct Interpreter
                     break;
                 }
                 default:
-                    std::cout << "Unreachable code\n";
-                    exit(1);
+                    unreachable(ip);
                 }
 
                 break;
@@ -1157,6 +1025,7 @@ struct Interpreter
             case instr::LDG:
             {
                 auto g = read_i32();
+                assert_with_ip(g >= 0 && g < result.header.globals_length, ip, "Tried to get invalid global");
                 push(stack[g]);
 
                 break;
@@ -1164,12 +1033,14 @@ struct Interpreter
             case instr::LDL:
             {
                 auto l = read_i32();
+                assert_with_ip(l >= 0 && l < locals, ip, "Tried to get invalid local");
                 push(stack[base + l]);
                 break;
             }
             case instr::LDA:
             {
                 auto a = read_i32();
+                assert_with_ip(a >= 0 && a < args, ip, "Tried to get invalid arg");
                 push(stack[base - args + a]);
 
                 break;
@@ -1177,25 +1048,36 @@ struct Interpreter
             case instr::LDC:
             {
                 auto c = read_i32();
+                assert_with_ip(is_closure, ip, "Tried to captured variable in non closure context");
                 auto cc = stack[base - args - 1];
+                assert_with_ip(c >= 0 && c < captured, ip, "Tried to get invalid captured");
                 auto cc_ = (aint *)cc;
                 push(cc_[c + 1]);
                 break;
             }
 
             case instr::LDGR:
+            {
+                not_implemented(ip, "LDGR");
+            }
             case instr::LDLR:
+            {
+                not_implemented(ip, "LDLR");
+            }
             case instr::LDAR:
+            {
+                not_implemented(ip, "LDAR");
+            }
             case instr::LDCR:
             {
-                std::cout << "Not implemented \n";
-                exit(1);
+                not_implemented(ip, "LDCR");
             }
             case instr::STG:
             {
                 auto g = read_i32();
                 auto v = pop();
 
+                assert_with_ip(g >= 0 && g < result.header.globals_length, ip, "Tried to get invalid global");
                 stack[g] = v;
                 push(v);
 
@@ -1206,6 +1088,7 @@ struct Interpreter
                 auto l = read_i32();
                 auto v = pop();
 
+                assert_with_ip(l >= 0 && l < locals, ip, "Tried to get invalid local");
                 stack[base + l] = v;
                 push(v);
 
@@ -1216,6 +1099,7 @@ struct Interpreter
                 auto a = read_i32();
                 auto v = pop();
 
+                assert_with_ip(a >= 0 && a < args, ip, "Tried to get invalid argument");
                 stack[base - args + a] = v;
                 push(v);
 
@@ -1224,7 +1108,9 @@ struct Interpreter
             case instr::STC:
             {
                 auto c = read_i32();
+                assert_with_ip(is_closure, ip, "Tried to get captured variable in non closure context");
                 auto cc = stack[base - args - 1];
+                assert_with_ip(c >= 0 && c < captured, ip, "Tried to get invalid captured");
                 auto cc_ = (aint *)cc;
                 auto v = pop();
 
@@ -1238,15 +1124,12 @@ struct Interpreter
                 auto l = read_i32();
                 auto v = pop();
 
-                if (!UNBOXED(v))
-                {
-                    std::cout << "Value is not int\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(v), ip, "Value is not integer");
 
                 if (UNBOX(v) == 0)
                 {
-                    this->ip = l;
+                    assert_with_ip(l >= 0 && l < get_code_size(), ip, "Tried to jump outside of code");
+                    ip = l;
                 }
 
                 break;
@@ -1256,15 +1139,12 @@ struct Interpreter
                 auto l = read_i32();
                 auto v = pop();
 
-                if (!UNBOXED(v))
-                {
-                    std::cout << "Value is not int\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(v), ip, "Value is not integer");
 
                 if (UNBOX(v) != 0)
                 {
-                    this->ip = l;
+                    assert_with_ip(l >= 0 && l < get_code_size(), ip, "Tried to jump outside of code");
+                    ip = l;
                 }
 
                 break;
@@ -1274,6 +1154,8 @@ struct Interpreter
             {
                 read_i32();
                 auto n = read_i32();
+
+                locals = n;
 
                 for (int32_t i = 0; i < n; i++)
                 {
@@ -1289,6 +1171,8 @@ struct Interpreter
                 auto *closure = get_object_content_ptr(alloc_closure(n + 1));
                 push(reinterpret_cast<aint>(closure));
                 static_cast<aint *>(closure)[0] = l;
+
+                assert_with_ip(l >= 0 && l < get_code_size(), ip, "Try to create closure outside of code");
 
                 for (int32_t i = 0; i < n; ++i)
                 {
@@ -1324,25 +1208,28 @@ struct Interpreter
             case instr::CALLC:
             {
                 auto n = read_i32();
-                auto closure = stack[stack.size() - n - 1];
+                auto closure = *(reinterpret_cast<aint *>(__gc_stack_bottom) - n - 1);
 
-                if (UNBOXED(closure) || get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(closure))) != CLOSURE)
-                {
-                    std::cout << "Call not closure\n";
-                    exit(1);
-                }
+                assert_with_ip(!UNBOXED(closure) && get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(closure))) == CLOSURE,
+                               ip, "Try to call not closure");
+
+                assert_with_ip(frames.size() < CALL_STACK_MAX_SIZE, ip, "Cant call closure: call stack overflow");
 
                 frames.push_back(SFrame{
                     .prev_ip = ip,
                     .prev_base = base,
                     .prev_args = args,
+                    .prev_locals = locals,
+                    .prev_captured = captured,
                     .is_closure = is_closure,
                 });
 
                 ip = reinterpret_cast<aint *>(closure)[0];
                 is_closure = true;
-                base = stack.size();
+                base = reinterpret_cast<aint *>(__gc_stack_bottom) - reinterpret_cast<aint *>(__gc_stack_top);
                 args = n;
+                locals = 0;
+                captured = LEN(TO_DATA(closure)->data_header) - 1;
 
                 break;
             }
@@ -1351,17 +1238,23 @@ struct Interpreter
                 auto l = read_i32();
                 auto n = read_i32();
 
+                assert_with_ip(frames.size() < CALL_STACK_MAX_SIZE, ip, "Cant call function: call stack overflow");
+
                 frames.push_back(SFrame{
                     .prev_ip = ip,
                     .prev_base = base,
                     .prev_args = args,
+                    .prev_locals = locals,
+                    .prev_captured = captured,
                     .is_closure = is_closure,
                 });
 
                 ip = l;
                 is_closure = false;
-                base = stack.size();
+                base = reinterpret_cast<aint *>(__gc_stack_bottom) - reinterpret_cast<aint *>(__gc_stack_top);
                 args = n;
+                captured = 0;
+                locals = 0;
 
                 break;
             }
@@ -1371,14 +1264,16 @@ struct Interpreter
                 auto n = read_i32();
                 auto v = pop();
 
-                std::string_view exp = &result.st.at(s);
+                assert_with_ip(s < result.header.st_length, ip, "String index out of table");
+                char *exp = &result.st[s];
+                aint exp_ = UNBOX(LtagHash(exp));
 
                 if (!UNBOXED(v) && get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(v))) == SEXP)
                 {
                     auto sexp_ = TO_SEXP(v);
-                    auto tag = reinterpret_cast<char *>(sexp_->tag);
+                    auto tag = sexp_->tag;
 
-                    push((LEN(sexp_->data_header) == n && exp == tag) ? BOX(1) : BOX(0));
+                    push((LEN(sexp_->data_header) == n && exp_ == tag) ? BOX(1) : BOX(0));
                 }
                 else
                 {
@@ -1503,11 +1398,7 @@ struct Interpreter
             {
                 auto v = pop();
 
-                if (!UNBOXED(v))
-                {
-                    std::cout << "Value is not int\n";
-                    exit(1);
-                }
+                assert_with_ip(UNBOXED(v), ip, "Value is not integer");
 
                 std::cout << UNBOX(v) << "\n";
 
@@ -1518,17 +1409,9 @@ struct Interpreter
             case instr::CALL_Llength:
             {
                 auto agg = pop();
-                if (UNBOXED(agg))
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
+                assert_with_ip(!UNBOXED(agg), ip, "Not aggregate");
                 auto tag = get_type_header_ptr(get_obj_header_ptr(reinterpret_cast<void *>(agg)));
-                if (tag != ARRAY && tag != STRING && tag != SEXP)
-                {
-                    std::cout << "Not aggregate\n";
-                    exit(1);
-                }
+                assert_with_ip(tag == ARRAY || tag == STRING || tag == SEXP, ip, "Not aggregate");
 
                 push(BOX(LEN(TO_DATA(agg)->data_header)));
                 break;
@@ -1537,14 +1420,16 @@ struct Interpreter
             {
                 auto v = pop();
 
-                std::ostringstream s_;
-                stringify(s_, v);
+                push(reinterpret_cast<aint>(Lstring(&v)));
 
-                std::string s = s_.str();
-                auto *r = get_object_content_ptr(alloc_string(s.size()));
+                // std::ostringstream s_;
+                // stringify(s_, v);
 
-                push(reinterpret_cast<aint>(r));
-                strcpy(TO_DATA(r)->contents, s.data());
+                // std::string s = s_.str();
+                // auto *r = get_object_content_ptr(alloc_string(s.size()));
+
+                // push(reinterpret_cast<aint>(r));
+                // strcpy(TO_DATA(r)->contents, s.data());
 
                 break;
             }
@@ -1563,25 +1448,29 @@ struct Interpreter
             }
 
             default:
+                assert(false, "Unsupported instruction");
                 break;
             }
         }
         return 0;
     }
 
-    Interpreter(Result result)
+    Interpreter(Result result_)
     {
-        const size_t base = result.globals_length + 2;
+        // Globals + dummy main arguments
+        const size_t base_ = result_.header.globals_length + 2;
 
-        this->result = result;
-        this->stack.resize(base, BOX(0));
-        this->ip = 0;
-        this->base = base;
-        this->args = 2;
-        this->is_closure = false;
+        result = result_;
+        stack.resize(STACK_MAX_SIZE, BOX(0));
+        ip = 0;
+        base = base_;
+        args = 2;
+        is_closure = false;
+
+        frames.reserve(CALL_STACK_MAX_SIZE);
 
         __gc_stack_top = stack.data();
-        __gc_stack_bottom = stack.data() + stack.size();
+        __gc_stack_bottom = stack.data() + base_;
 
         __init();
     }
@@ -1726,11 +1615,13 @@ struct Analyser
 
     Analyser(Result res)
     {
+        std::vector<char> code_;
+        code_.insert(code_.end(), res.code, res.code + res.code_size);
         result = res;
-        blocks.push_back({
+        blocks.push_back(Block{
             .offset_start = 0,
-            .offset_end = (long)res.code.size(),
-            .code = res.code,
+            .offset_end = res.code_size,
+            .code = code_,
         });
     }
 
@@ -1760,7 +1651,7 @@ struct Analyser
     {
         auto code = result.code;
 
-        for (long ip = 0; ip < code.size(); ip++)
+        for (long ip = 0; ip < result.code_size; ip++)
         {
             switch (code[ip])
             {
@@ -1979,8 +1870,7 @@ struct Analyser
             }
             default:
             {
-                std::cout << "Unknown instruction " << static_cast<long>(code[ip]) << "\n";
-                exit(1);
+                unknown_instruction(ip, static_cast<long>(code[ip]));
             }
             }
         }
@@ -2080,20 +1970,25 @@ std::string to_hex_string(const std::vector<char> &vec)
     return oss.str();
 }
 
+namespace mode
+{
+    enum Mode
+    {
+        VALIDATE,
+        DUMP,
+        ANALYSE,
+        RUN,
+    };
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 2)
-    {
-        std::cout << "No input file\n";
-        exit(1);
-    }
+    assert(argc >= 2, "No input file");
 
     std::string fname;
     std::string flag;
 
-    bool validate_only = false;
-    bool dump_bc = false;
-    bool analyse_bc = false;
+    mode::Mode mode = mode::RUN;
 
     if (argc >= 3)
     {
@@ -2102,15 +1997,15 @@ int main(int argc, char **argv)
 
         if (flag == "-c")
         {
-            validate_only = true;
+            mode = mode::VALIDATE;
         }
         else if (flag == "-d")
         {
-            dump_bc = true;
+            mode = mode::DUMP;
         }
         else if (flag == "-a")
         {
-            analyse_bc = true;
+            mode = mode::ANALYSE;
         }
     }
     else
@@ -2120,21 +2015,21 @@ int main(int argc, char **argv)
 
     std::vector<char> bytes = read_file(fname);
 
-    Result result = parse_and_validate(bytes);
+    Result result = parse_and_validate(std::move(bytes));
 
-    if (validate_only)
+    switch (mode)
+    {
+    case mode::VALIDATE:
     {
         std::cout << "Parsed filed succesfully\n";
         exit(0);
     }
-
-    if (dump_bc)
+    case mode::DUMP:
     {
-        dump_bytecode(result.code);
+        dump_bytecode(result.code, result.code_size);
         exit(0);
     }
-
-    if (analyse_bc)
+    case mode::ANALYSE:
     {
         Analyser a = Analyser(result);
         auto idioms = a.analyse();
@@ -2148,7 +2043,15 @@ int main(int argc, char **argv)
 
         exit(0);
     }
-
-    Interpreter it = Interpreter(result);
-    return it.interpret();
+    case mode::RUN:
+    {
+        Interpreter it = Interpreter(result);
+        exit(it.interpret());
+    }
+    default:
+    {
+        std::cout << "Unsupported mode\n";
+        exit(1);
+    }
+    }
 }
