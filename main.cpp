@@ -133,7 +133,6 @@ Result parse_and_validate(std::vector<char> bytes)
 
 namespace instr
 {
-
     enum Instr : char
     {
         ADD = 0x01,
@@ -197,414 +196,383 @@ namespace instr
         CALL_Lstring,
         CALL_Barray
     };
+
+    const char *name(Instr _ins)
+    {
+        switch (_ins)
+        {
+        case ADD:
+            return "ADD";
+        case SUB:
+            return "SUB";
+        case MUL:
+            return "MUL";
+        case DIV:
+            return "DIV";
+        case REM:
+            return "REM";
+        case LSS:
+            return "LSS";
+        case LEQ:
+            return "LEQ";
+        case GRE:
+            return "GRE";
+        case GEQ:
+            return "GEQ";
+        case EQU:
+            return "EQU";
+        case NEQ:
+            return "NEQ";
+        case AND:
+            return "AND";
+        case OR:
+            return "OR";
+        case CONST:
+            return "CONST";
+        case STRING:
+            return "STRING";
+        case SEXP:
+            return "SEXP";
+        case STI:
+            return "STI";
+        case STA:
+            return "STA";
+        case JMP:
+            return "JMP";
+        case END:
+            return "END";
+        case RET:
+            return "RET";
+        case DROP:
+            return "DROP";
+        case DUP:
+            return "DUP";
+        case SWAP:
+            return "SWAP";
+        case ELEM:
+            return "ELEM";
+        case LDG:
+            return "LDG";
+        case LDL:
+            return "LDL";
+        case LDA:
+            return "LDA";
+        case LDC:
+            return "LDC";
+        case LDGR:
+            return "LDGR";
+        case LDLR:
+            return "LDLR";
+        case LDAR:
+            return "LDAR";
+        case LDCR:
+            return "LDCR";
+        case STG:
+            return "STG";
+        case STL:
+            return "STL";
+        case STA_:
+            return "STA_";
+        case STC:
+            return "STC";
+        case CJMPZ:
+            return "CJMPZ";
+        case CJMPNZ:
+            return "CJMPNZ";
+        case BEGIN:
+            return "BEGIN";
+        case CBEGIN:
+            return "CBEGIN";
+        case CLOSURE:
+            return "CLOSURE";
+        case CALLC:
+            return "CALLC";
+        case CALL:
+            return "CALL";
+        case TAG:
+            return "TAG";
+        case ARRAY:
+            return "ARRAY";
+        case FAIL:
+            return "FAIL";
+        case LINE:
+            return "LINE";
+        case PATT_eq:
+            return "PATT_eq";
+        case PATT_is_string:
+            return "PATT_is_string";
+        case PATT_is_array:
+            return "PATT_is_array";
+        case PATT_is_sexp:
+            return "PATT_is_sexp";
+        case PATT_is_ref:
+            return "PATT_is_ref";
+        case PATT_is_val:
+            return "PATT_is_val";
+        case PATT_is_fun:
+            return "PATT_is_fun";
+        case CALL_Lread:
+            return "CALL_Lread";
+        case CALL_Lwrite:
+            return "CALL_Lwrite";
+        case CALL_Llength:
+            return "CALL_Llength";
+        case CALL_Lstring:
+            return "CALL_Lstring";
+        case CALL_Barray:
+            return "CALL_Barray";
+        default:
+            return "UNK";
+        }
+    };
+}
+
+#pragma pack(push, 1)
+struct Instruction
+{
+    struct CArg
+    {
+        enum CArgType : char
+        {
+            L = 1,
+            G = 2,
+            A = 3,
+            C = 4
+        };
+
+        CArgType tag;
+        int32_t arg;
+    };
+
+    instr::Instr tag;
+    int32_t args[2];
+    CArg cargs[0];
+
+    size_t get_args_length() const
+    {
+        switch (tag)
+        {
+        case instr::ADD:
+        case instr::SUB:
+        case instr::MUL:
+        case instr::DIV:
+        case instr::REM:
+        case instr::LSS:
+        case instr::LEQ:
+        case instr::GRE:
+        case instr::GEQ:
+        case instr::EQU:
+        case instr::NEQ:
+        case instr::AND:
+        case instr::OR:
+        {
+            return 0;
+        }
+        case instr::CONST:
+        case instr::STRING:
+        {
+            return 1;
+        }
+        case instr::SEXP:
+        {
+            return 2;
+        }
+        case instr::STI:
+        case instr::STA:
+        {
+            return 0;
+        }
+        case instr::JMP:
+        {
+            return 1;
+        }
+        case instr::END:
+        case instr::RET:
+        case instr::DROP:
+        case instr::DUP:
+        case instr::SWAP:
+        case instr::ELEM:
+        {
+            return 0;
+        }
+        case instr::LDG:
+        case instr::LDL:
+        case instr::LDA:
+        case instr::LDC:
+        case instr::LDGR:
+        case instr::LDLR:
+        case instr::LDAR:
+        case instr::LDCR:
+        case instr::STG:
+        case instr::STL:
+        case instr::STA_:
+        case instr::STC:
+        case instr::CJMPZ:
+        case instr::CJMPNZ:
+        {
+            return 1;
+        }
+        case instr::BEGIN:
+        case instr::CBEGIN:
+        {
+            return 2;
+        }
+        case instr::CLOSURE:
+        {
+            // Special case
+            return 2;
+        }
+        case instr::CALLC:
+        {
+            return 1;
+        }
+        case instr::CALL:
+        case instr::TAG:
+        {
+            return 2;
+        }
+        case instr::ARRAY:
+        {
+            return 1;
+        }
+        case instr::FAIL:
+        {
+            return 2;
+        }
+        case instr::LINE:
+        {
+            return 1;
+        }
+        case instr::PATT_eq:
+        case instr::PATT_is_string:
+        case instr::PATT_is_array:
+        case instr::PATT_is_sexp:
+        case instr::PATT_is_ref:
+        case instr::PATT_is_val:
+        case instr::PATT_is_fun:
+        case instr::CALL_Lread:
+        case instr::CALL_Lwrite:
+        case instr::CALL_Llength:
+        case instr::CALL_Lstring:
+        {
+            return 0;
+        }
+        case instr::CALL_Barray:
+        {
+            return 1;
+        }
+        default:
+        {
+            return 0;
+        }
+        }
+    }
+
+    bool is_hex_arg(size_t arg) const
+    {
+        switch (tag)
+        {
+        case instr::STRING:
+        case instr::SEXP:
+        case instr::JMP:
+        case instr::CJMPZ:
+        case instr::CJMPNZ:
+        case instr::CLOSURE:
+        case instr::CALL:
+        case instr::TAG:
+        {
+            return arg == 0;
+        }
+        default:
+        {
+            return false;
+        }
+        }
+    }
+
+    bool is_closure() const
+    {
+        switch (tag)
+        {
+        case instr::CLOSURE:
+            return true;
+
+        default:
+            return false;
+        }
+    }
+
+    const char *get_tag_name() const
+    {
+        return instr::name(tag);
+    }
+
+    size_t size() const
+    {
+        size_t closure_args = 0;
+        if (is_closure())
+        {
+            closure_args = args[1] * (sizeof(char) + sizeof(int32_t));
+        }
+        return sizeof(char) + sizeof(int32_t) * get_args_length() + closure_args;
+    }
+};
+#pragma pack(pop, 1)
+
+std::ostream &operator<<(std::ostream &os, const Instruction &_ins)
+{
+    os << _ins.get_tag_name();
+    for (size_t i = 0; i < _ins.get_args_length(); i++)
+    {
+        if (_ins.is_hex_arg(i))
+        {
+            os << std::hex << " 0x" << _ins.args[i] << std::dec;
+        }
+        else
+        {
+            os << " " << _ins.args[i];
+        }
+    }
+    if (_ins.is_closure())
+    {
+        for (int32_t i = 0; i < _ins.args[1]; i++)
+        {
+            auto carg = _ins.cargs[i];
+            switch (carg.tag)
+            {
+            case carg.G:
+                os << " G(";
+                break;
+            case carg.L:
+                os << " L(";
+                break;
+            case carg.A:
+                os << " A(";
+                break;
+            case carg.C:
+                os << " C(";
+                break;
+            }
+            os << carg.arg << ")";
+        }
+    }
+    return os;
 }
 
 void dump_bytecode(char *code, int32_t code_size)
 {
-    for (int32_t ip = 0; ip < code_size; ip++)
+    for (int32_t ip = 0; ip < code_size;)
     {
-        auto read_i32 = [&]()
+        Instruction *cur = reinterpret_cast<Instruction *>(code + ip);
+        if (ip + cur->size() > code_size)
         {
-            int32_t arg;
-            assert_with_ip(ip + 1 + sizeof(int32_t) < code_size, ip, "Unexpected end of file reading argument");
-            std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-            ip += sizeof(arg);
-            return arg;
-        };
+            // We reached end with trailing bytes
+            return;
+        }
 
-        switch (code[ip])
-        {
-        case instr::ADD:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "ADD\n";
-            break;
-        }
-        case instr::SUB:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "SUB\n";
-            break;
-        }
-        case instr::MUL:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "MUL\n";
-            break;
-        }
-        case instr::DIV:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "DIV\n";
-            break;
-        }
-        case instr::REM:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "REM\n";
-            break;
-        }
-        case instr::LSS:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "LSS\n";
-            break;
-        }
-        case instr::LEQ:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "LEQ\n";
-            break;
-        }
-        case instr::GRE:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "GRE\n";
-            break;
-        }
-        case instr::GEQ:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "GEQ\n";
-            break;
-        }
-        case instr::EQU:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "EQU\n";
-            break;
-        }
-        case instr::NEQ:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "NEQ\n";
-            break;
-        }
-        case instr::AND:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "AND\n";
-            break;
-        }
-        case instr::OR:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "OR\n";
-            break;
-        }
-        case instr::CONST:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CONST " << arg << "\n";
-            break;
-        }
-        case instr::STRING:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "STRING " << arg << "\n";
-            break;
-        }
-        case instr::SEXP:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "SEXP " << arg1 << " " << arg2 << "\n";
-            break;
-        }
-        case instr::STI:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "STI\n";
-            break;
-        }
-        case instr::STA:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "STA\n";
-            break;
-        }
-        case instr::JMP:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "JMP " << arg << "\n";
-            break;
-        }
-        case instr::END:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "END\n";
-            break;
-        }
-        case instr::RET:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "RET\n";
-            break;
-        }
-        case instr::DROP:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "DROP\n";
-            break;
-        }
-        case instr::DUP:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "DUP\n";
-            break;
-        }
-        case instr::SWAP:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "SWAP\n";
-            break;
-        }
-        case instr::ELEM:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "ELEM\n";
-            break;
-        }
-        case instr::LDG:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDG " << arg << "\n";
-            break;
-        }
-        case instr::LDL:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDL " << arg << "\n";
-            break;
-        }
-        case instr::LDA:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDA " << arg << "\n";
-            break;
-        }
-        case instr::LDC:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDC " << arg << "\n";
-            break;
-        }
-        case instr::LDGR:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDGR " << arg << "\n";
-            break;
-        }
-        case instr::LDLR:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDLR " << arg << "\n";
-            break;
-        }
-        case instr::LDAR:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDAR " << arg << "\n";
-            break;
-        }
-        case instr::LDCR:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LDCR " << arg << "\n";
-            break;
-        }
-        case instr::STG:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "STG " << arg << "\n";
-            break;
-        }
-        case instr::STL:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "STL " << arg << "\n";
-            break;
-        }
-        case instr::STA_:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "STA_ " << arg << "\n";
-            break;
-        }
-        case instr::STC:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "STC " << arg << "\n";
-            break;
-        }
-        case instr::CJMPZ:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CJMPZ " << arg << "\n";
-            break;
-        }
-        case instr::CJMPNZ:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CJMPNZ " << arg << "\n";
-            break;
-        }
-        case instr::BEGIN:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "BEGIN " << arg1 << " " << arg2 << "\n";
-            break;
-        }
-        case instr::CBEGIN:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CBEGIN " << arg1 << " " << arg2 << "\n";
-            break;
-        }
-        case instr::CLOSURE:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
+        std::cout << "[ip=0x" << std::hex << ip << std::dec << "] " << *cur << "\n";
 
-            std::cout << std::hex << _ip << std::dec << " " << "CLOSURE " << arg1 << " " << arg2;
-
-            for (int32_t i = 0; i < arg2; i++)
-            {
-                char t;
-                int32_t m;
-                std::memcpy(&t, &code[ip + 1], sizeof(char));
-                std::memcpy(&m, &code[ip + 2], sizeof(int32_t));
-                ip += 5;
-
-                switch (t)
-                {
-                case 1:
-                    std::cout << " G(";
-                    break;
-                case 2:
-                    std::cout << " L(";
-                    break;
-                case 3:
-                    std::cout << " A(";
-                    break;
-                case 4:
-                    std::cout << " C(";
-                    break;
-                }
-                std::cout << m << ")";
-            }
-
-            std::cout << "\n";
-            break;
-        }
-        case instr::CALLC:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CALLC " << std::hex << arg << std::dec << "\n";
-            break;
-        }
-        case instr::CALL:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CALL " << std::hex << arg1 << std::dec << " " << arg2 << "\n";
-            break;
-        }
-        case instr::TAG:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "TAG " << arg1 << arg2 << "\n";
-            break;
-        }
-        case instr::ARRAY:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "ARRAY " << arg << "\n";
-            break;
-        }
-        case instr::FAIL:
-        {
-            const size_t _ip = ip;
-            int32_t arg1 = read_i32(), arg2 = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "FAIL " << arg1 << " " << arg2 << "\n";
-            break;
-        }
-        case instr::LINE:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "LINE " << arg << "\n";
-            break;
-        }
-        case instr::PATT_eq:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_eq\n";
-            break;
-        }
-        case instr::PATT_is_string:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_string\n";
-            break;
-        }
-        case instr::PATT_is_array:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_array\n";
-            break;
-        }
-        case instr::PATT_is_sexp:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_sexp\n";
-            break;
-        }
-        case instr::PATT_is_ref:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_ref\n";
-            break;
-        }
-        case instr::PATT_is_val:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_val\n";
-            break;
-        }
-        case instr::PATT_is_fun:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "PATT_is_fun\n";
-            break;
-        }
-        case instr::CALL_Lread:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "CALL_Lread\n";
-            break;
-        }
-        case instr::CALL_Lwrite:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "CALL_Lwrite\n";
-            break;
-        }
-        case instr::CALL_Llength:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "CALL_Llength\n";
-            break;
-        }
-        case instr::CALL_Lstring:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "CALL_Lstring\n";
-            break;
-        }
-        case instr::CALL_Barray:
-        {
-            const size_t _ip = ip;
-            int32_t arg = read_i32();
-            std::cout << std::hex << _ip << std::dec << " " << "CALL_Barray " << arg << "\n";
-            break;
-        }
-        default:
-        {
-            std::cout << std::hex << ip << std::dec << " " << "UNK\n";
-            break;
-        }
-        }
+        ip += cur->size();
     }
 }
 
@@ -1481,456 +1449,84 @@ struct Interpreter
     }
 };
 
-long get_instr_size(instr::Instr instr)
-{
-    switch (instr)
-    {
-    case instr::ADD:
-    case instr::SUB:
-    case instr::MUL:
-    case instr::DIV:
-    case instr::REM:
-    case instr::LSS:
-    case instr::LEQ:
-    case instr::GRE:
-    case instr::GEQ:
-    case instr::EQU:
-    case instr::NEQ:
-    case instr::AND:
-    case instr::OR:
-    {
-        return 1;
-    }
-    case instr::CONST:
-    case instr::STRING:
-    {
-        return 5;
-    }
-    case instr::SEXP:
-    {
-        return 9;
-    }
-    case instr::STI:
-    case instr::STA:
-    {
-        return 1;
-    }
-    case instr::JMP:
-    {
-        return 5;
-    }
-    case instr::END:
-    case instr::RET:
-    case instr::DROP:
-    case instr::DUP:
-    case instr::SWAP:
-    case instr::ELEM:
-    {
-        return 1;
-    }
-    case instr::LDG:
-    case instr::LDL:
-    case instr::LDA:
-    case instr::LDC:
-    case instr::LDGR:
-    case instr::LDLR:
-    case instr::LDAR:
-    case instr::LDCR:
-    case instr::STG:
-    case instr::STL:
-    case instr::STA_:
-    case instr::STC:
-    case instr::CJMPZ:
-    case instr::CJMPNZ:
-    {
-        return 5;
-    }
-    case instr::BEGIN:
-    case instr::CBEGIN:
-    {
-        return 9;
-    }
-    case instr::CLOSURE:
-    {
-        return -1;
-    }
-    case instr::CALLC:
-    {
-        return 5;
-    }
-    case instr::CALL:
-    case instr::TAG:
-    {
-        return 9;
-    }
-    case instr::ARRAY:
-    {
-        return 5;
-    }
-    case instr::FAIL:
-    {
-        return 9;
-    }
-    case instr::LINE:
-    {
-        return 5;
-    }
-    case instr::PATT_eq:
-    case instr::PATT_is_string:
-    case instr::PATT_is_array:
-    case instr::PATT_is_sexp:
-    case instr::PATT_is_ref:
-    case instr::PATT_is_val:
-    case instr::PATT_is_fun:
-    case instr::CALL_Lread:
-    case instr::CALL_Lwrite:
-    case instr::CALL_Llength:
-    case instr::CALL_Lstring:
-    {
-        return 1;
-    }
-    case instr::CALL_Barray:
-    {
-        return 5;
-    }
-    default:
-    {
-        return -1;
-    }
-    }
-}
-
 struct Block
 {
-    long offset_start;
-    long offset_end;
-    std::vector<char> code;
+    uint32_t offset_start;
+    uint32_t offset_end;
+
+    uint32_t get_start()
+    {
+        return offset_start >> 1;
+    }
+
+    void set_start(uint32_t start)
+    {
+        offset_start = start << 1 | (offset_start & 1);
+    }
+
+    uint32_t get_end()
+    {
+        return offset_end >> 1;
+    }
+
+    void set_end(uint32_t end)
+    {
+        offset_end = end << 1 | (offset_end & 1);
+    }
+
+    bool get_reachable()
+    {
+        return (offset_start & 1U) == 1;
+    }
+
+    void set_reachable(bool reachable)
+    {
+        if (reachable)
+        {
+            offset_start |= 1U;
+        }
+        else
+        {
+            offset_start &= ~1U;
+        }
+    }
+
+    bool get_visited()
+    {
+        return (offset_end & 1U) == 1;
+    }
+
+    void set_visited(bool visited)
+    {
+        if (visited)
+        {
+            offset_end |= 1U;
+        }
+        else
+        {
+            offset_end &= ~1U;
+        }
+    }
+
+    Block(uint32_t start = 0, uint32_t end = 0)
+        : offset_start(start << 1), offset_end(end << 1) {}
 };
 
 struct Analyser
 {
     Result result;
-    std::vector<Block> blocks;
-    std::vector<std::tuple<std::vector<char>, long>> occurencies;
+    // Bitvectors
+    std::vector<bool> reachable, visited, boundary;
+
+    std::vector<std::tuple<uint32_t, uint32_t>> occurencies;
+    std::vector<std::tuple<uint32_t, uint32_t>> double_occurencies;
 
     Analyser(Result res)
     {
-        std::vector<char> code_;
-        code_.insert(code_.end(), res.code, res.code + res.code_size);
         result = res;
-        blocks.push_back(Block{
-            .offset_start = 0,
-            .offset_end = res.code_size,
-            .code = code_,
-        });
-    }
-
-    void split_at(long l)
-    {
-        for (size_t i = 0; i < blocks.size(); i++)
-        {
-            if (blocks[i].offset_start == l)
-            {
-                return;
-            }
-            if (blocks[i].offset_start < l && blocks[i].offset_end > l)
-            {
-                blocks.push_back({
-                    .offset_start = l,
-                    .offset_end = blocks[i].offset_end,
-                    .code = std::vector<char>(blocks[i].code.begin() + (l - blocks[i].offset_start), blocks[i].code.end()),
-                });
-                blocks[i].code.resize(l - blocks[i].offset_start);
-                blocks[i].offset_end = l;
-                return;
-            }
-        }
-    }
-
-    void split_blocks()
-    {
-        auto code = result.code;
-
-        for (long ip = 0; ip < result.code_size; ip++)
-        {
-            switch (code[ip])
-            {
-            case instr::ADD:
-            case instr::SUB:
-            case instr::MUL:
-            case instr::DIV:
-            case instr::REM:
-            case instr::LSS:
-            case instr::LEQ:
-            case instr::GRE:
-            case instr::GEQ:
-            case instr::EQU:
-            case instr::NEQ:
-            case instr::AND:
-            case instr::OR:
-            {
-                break;
-            }
-            case instr::CONST:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::STRING:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::SEXP:
-            {
-                ip += 8;
-                break;
-            }
-            case instr::STI:
-            case instr::STA:
-            {
-                break;
-            }
-            case instr::JMP:
-            {
-                int32_t arg;
-                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-                ip += sizeof(arg);
-                split_at(arg);
-                break;
-            }
-            case instr::END:
-            {
-                break;
-            }
-            case instr::RET:
-            {
-                break;
-            }
-            case instr::DROP:
-            case instr::DUP:
-            case instr::SWAP:
-            case instr::ELEM:
-            {
-                break;
-            }
-            case instr::LDG:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDL:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDA:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDC:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDGR:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDLR:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDAR:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::LDCR:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::STG:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::STL:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::STA_:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::STC:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::CJMPZ:
-            {
-                int32_t arg;
-                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-                ip += sizeof(arg);
-                split_at(arg);
-                break;
-            }
-            case instr::CJMPNZ:
-            {
-                int32_t arg;
-                std::memcpy(&arg, &code[ip + 1], sizeof(arg));
-                ip += sizeof(arg);
-                split_at(arg);
-                break;
-            }
-            case instr::BEGIN:
-            {
-                ip += 8;
-                split_at(ip + 1);
-                break;
-            }
-            case instr::CBEGIN:
-            {
-                ip += 8;
-                split_at(ip + 1);
-                break;
-            }
-            case instr::CLOSURE:
-            {
-                const size_t _ip = ip;
-                int32_t arg1, arg2;
-                std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-                std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-                ip += sizeof(arg1) + sizeof(arg2);
-                ip += 5 * arg2;
-
-                split_at(arg1);
-                break;
-            }
-            case instr::CALLC:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::CALL:
-            {
-                const size_t _ip = ip;
-                int32_t arg1, arg2;
-                std::memcpy(&arg1, &code[ip + 1], sizeof(arg1));
-                std::memcpy(&arg2, &code[ip + 1 + sizeof(arg1)], sizeof(arg2));
-                ip += sizeof(arg1) + sizeof(arg2);
-                split_at(arg1);
-                break;
-            }
-            case instr::TAG:
-            {
-                ip += 8;
-                break;
-            }
-            case instr::ARRAY:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::FAIL:
-            {
-                ip += 8;
-                break;
-            }
-            case instr::LINE:
-            {
-                ip += 4;
-                break;
-            }
-            case instr::PATT_eq:
-            case instr::PATT_is_string:
-            case instr::PATT_is_array:
-            case instr::PATT_is_sexp:
-            case instr::PATT_is_ref:
-            case instr::PATT_is_val:
-            case instr::PATT_is_fun:
-            case instr::CALL_Lread:
-            case instr::CALL_Lwrite:
-            case instr::CALL_Llength:
-            case instr::CALL_Lstring:
-            {
-                break;
-            }
-            case instr::CALL_Barray:
-            {
-                ip += 4;
-                break;
-            }
-            default:
-            {
-                unknown_instruction(ip, static_cast<long>(code[ip]));
-            }
-            }
-        }
-    }
-
-    void add_instr(std::vector<char> instr)
-    {
-        for (long i = 0; i < occurencies.size(); i++)
-        {
-            if (std::get<0>(occurencies[i]) == instr)
-            {
-                occurencies[i] = std::tuple(std::get<0>(occurencies[i]), std::get<1>(occurencies[i]) + 1);
-                return;
-            }
-        }
-
-        occurencies.push_back(std::tuple(instr, 1));
-    }
-
-    void process_block(Block b)
-    {
-        auto code = b.code;
-        bool has_prev = false;
-        std::vector<char> prev;
-        long instr_size = 0;
-        for (long i = 0; i < code.size(); i += instr_size)
-        {
-            instr_size = get_instr_size((instr::Instr)code[i]);
-            if (instr_size <= 0)
-            {
-                switch (code[i])
-                {
-                case instr::CLOSURE:
-                    int32_t arg1, arg2;
-                    std::memcpy(&arg1, &code[i + 1], sizeof(arg1));
-                    std::memcpy(&arg2, &code[i + 1 + sizeof(arg1)], sizeof(arg2));
-                    instr_size = 9 + 5 * arg2;
-                    break;
-
-                default:
-                    std::cout << "Unknown instruction " << static_cast<long>(code[i]) << "\n";
-                    exit(1);
-                }
-            }
-
-            std::vector<char> cur = std::vector<char>(code.begin() + i, code.begin() + i + instr_size);
-            add_instr(cur);
-
-            if (has_prev)
-            {
-                std::vector<char> dcur;
-                dcur.insert(dcur.end(), prev.begin(), prev.end());
-                dcur.insert(dcur.end(), cur.begin(), cur.end());
-
-                add_instr(dcur);
-            }
-
-            prev = cur;
-            has_prev = true;
-        }
+        reachable.resize(res.code_size, false);
+        visited.resize(res.code_size, false);
+        boundary.resize(res.code_size, false);
     }
 
     void sort_occurencies()
@@ -1940,20 +1536,178 @@ struct Analyser
                   {
                       return std::get<1>(a) > std::get<1>(b);
                   });
+
+        std::sort(double_occurencies.begin(), double_occurencies.end(),
+                  [](const auto &a, const auto &b)
+                  {
+                      return std::get<1>(a) > std::get<1>(b);
+                  });
     }
 
-    std::vector<std::tuple<std::vector<char>, long>> analyse()
+    void mark_instructions()
     {
-        split_blocks();
-
-        for (long i = 0; i < blocks.size(); i++)
+        for (int i = 0; i < result.header.pubs_length; i++)
         {
-            process_block(blocks[i]);
+            assert(result.pubs[i].b >= 0 && result.pubs[i].b < result.code_size, "Public symbol points outside of code");
+            reachable[i] = true;
         }
 
-        sort_occurencies();
+        bool has_reachable;
+        do
+        {
+            has_reachable = false;
+            for (int32_t i = 0; i < result.code_size;)
+            {
+                if (!reachable[i] || visited[i])
+                {
+                    i++;
+                    continue;
+                }
+                has_reachable = true;
+                visited[i] = true;
+                Instruction *cur = reinterpret_cast<Instruction *>(result.code + i);
 
-        return occurencies;
+                if (i + cur->size() > result.code_size)
+                {
+                    goto LOOP_END;
+                }
+
+                switch (cur->tag)
+                {
+                case instr::JMP:
+                    boundary[i] = true;
+                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to jump outside of code");
+                    reachable[cur->args[0]] = true;
+                    i = cur->args[0];
+                    // Skip default next iter
+                    continue;
+                case instr::END:
+                case instr::RET:
+                    boundary[i] = true;
+                    goto LOOP_END;
+                case instr::CJMPZ:
+                case instr::CJMPNZ:
+                case instr::CALL:
+                    boundary[i] = true;
+                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to jump outside of code");
+                    reachable[cur->args[0]] = true;
+                    break;
+                case instr::BEGIN:
+                case instr::CBEGIN:
+                    if (i > 0)
+                    {
+                        boundary[i - 1] = true;
+                    }
+                    break;
+                case instr::CLOSURE:
+                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to create closure outside of code");
+                    reachable[cur->args[0]] = true;
+                    break;
+                case instr::CALLC:
+                    boundary[i] = true;
+                    break;
+                }
+                i += cur->size();
+                if (i < result.code_size)
+                {
+                    reachable[i] = true;
+                }
+            }
+        LOOP_END:
+        } while (has_reachable);
+    }
+
+    void add_instr(Instruction *_inst)
+    {
+        for (int32_t i = 0; i < occurencies.size(); i++)
+        {
+            auto _inst2 = reinterpret_cast<Instruction *>(result.code + std::get<0>(occurencies[i]));
+            auto size1 = _inst->size();
+            auto size2 = _inst2->size();
+            if (size1 != size2)
+            {
+                continue;
+            }
+            if (std::memcmp(_inst, _inst2, size1) != 0)
+            {
+                continue;
+            }
+            occurencies[i] = std::tuple(std::get<0>(occurencies[i]), std::get<1>(occurencies[i]) + 1);
+            return;
+        }
+        occurencies.push_back(std::tuple(reinterpret_cast<char *>(_inst) - result.code, 1));
+    }
+
+    void add_double_instr(Instruction *_inst)
+    {
+        for (int32_t i = 0; i < double_occurencies.size(); i++)
+        {
+            auto _inst2 = reinterpret_cast<Instruction *>(result.code + std::get<0>(double_occurencies[i]));
+            auto size1 = _inst->size();
+            auto size2 = _inst2->size();
+            if (size1 != size2)
+            {
+                continue;
+            }
+            auto _inst3 = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(_inst) + size1);
+            auto _inst4 = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(_inst2) + size1);
+            auto size3 = _inst3->size();
+            auto size4 = _inst4->size();
+            if (size3 != size4)
+            {
+                continue;
+                ;
+            }
+            if (std::memcmp(_inst, _inst2, size1 + size3) != 0)
+            {
+                continue;
+            }
+            double_occurencies[i] = std::tuple(std::get<0>(double_occurencies[i]), std::get<1>(double_occurencies[i]) + 1);
+            return;
+        }
+        double_occurencies.push_back(std::tuple(reinterpret_cast<char *>(_inst) - result.code, 1));
+    }
+
+    void count_occurencies()
+    {
+        Instruction *prev = nullptr;
+        for (int32_t i = 0; i < result.code_size;)
+        {
+            Instruction *cur = reinterpret_cast<Instruction *>(result.code + i);
+            if (i + cur->size() > result.code_size)
+            {
+                return;
+            }
+            if (!reachable[i])
+            {
+                i += 1;
+                prev = nullptr;
+                continue;
+            }
+
+            add_instr(cur);
+            if (prev != nullptr)
+            {
+                add_double_instr(prev);
+            }
+
+            if (boundary[i])
+            {
+                prev = nullptr;
+            }
+            else
+            {
+                prev = cur;
+            }
+            i += cur->size();
+        }
+    }
+
+    void analyse()
+    {
+        mark_instructions();
+        count_occurencies();
+        sort_occurencies();
     }
 };
 
@@ -1968,6 +1722,18 @@ std::string to_hex_string(const std::vector<char> &vec)
         oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(vec[i]));
     }
     return oss.str();
+}
+
+void print_occurency(char *code, std::tuple<int32_t, int32_t> occ, int32_t size)
+{
+    std::cout << std::get<1>(occ) << " ";
+    auto cur = reinterpret_cast<Instruction *>(code + std::get<0>(occ));
+    for (int32_t i = 0; i < size - 1; i++)
+    {
+        std::cout << *cur << "; ";
+        cur = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(cur) + cur->size());
+    }
+    std::cout << *cur << "\n";
 }
 
 namespace mode
@@ -2032,13 +1798,36 @@ int main(int argc, char **argv)
     case mode::ANALYSE:
     {
         Analyser a = Analyser(result);
-        auto idioms = a.analyse();
+        a.analyse();
 
         std::cout << "Instructions sorted by occurencies:\n";
 
-        for (int i = 0; i < idioms.size(); i++)
+        for (int32_t i = 0, j = 0; i < a.occurencies.size() && j < a.double_occurencies.size();)
         {
-            std::cout << std::get<1>(idioms[i]) << "\t" << to_hex_string(std::get<0>(idioms[i])) << "\n";
+            if (i >= a.occurencies.size())
+            {
+                auto occ = a.double_occurencies[j++];
+                print_occurency(result.code, occ, 2);
+                continue;
+            }
+            if (j >= a.double_occurencies.size())
+            {
+                auto occ = a.occurencies[i++];
+                print_occurency(result.code, occ, 1);
+                continue;
+            }
+            auto occ1 = a.occurencies[i];
+            auto occ2 = a.double_occurencies[j];
+            if (std::get<1>(occ1) > std::get<1>(occ2))
+            {
+                print_occurency(result.code, occ1, 1);
+                i++;
+            }
+            else
+            {
+                print_occurency(result.code, occ2, 2);
+                j++;
+            }
         }
 
         exit(0);
