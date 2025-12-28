@@ -516,6 +516,11 @@ struct Instruction
         }
         return sizeof(char) + sizeof(int32_t) * get_args_length() + closure_args;
     }
+
+    bool operator==(const Instruction &other) const
+    {
+        return memcmp(this, &other, size()) == 0;
+    }
 };
 #pragma pack(pop, 1)
 
@@ -1512,18 +1517,49 @@ struct Block
         : offset_start(start << 1), offset_end(end << 1) {}
 };
 
+struct Code
+{
+    char *code;
+    int32_t code_size;
+
+    Instruction *get_by_id(int32_t id) const
+    {
+        assert(id >= 0 && id < code_size, "Tried to get instruction outside of code");
+        return reinterpret_cast<Instruction *>(code + id);
+    }
+
+    int32_t to_id(Instruction *_ins) const
+    {
+        auto res = reinterpret_cast<char *>(_ins) - code;
+        assert(res >= 0 && res < code_size, "Tried to get id outside of code");
+        return res;
+    }
+
+    Instruction *get_next(Instruction *_ins) const
+    {
+        auto id = to_id(_ins);
+        if (id + _ins->size() >= code_size)
+        {
+            return nullptr;
+        }
+        return get_by_id(id + _ins->size());
+    }
+
+    Code(char *code_, int32_t size) : code(code_), code_size(size) {}
+};
+
 struct Analyser
 {
     Result result;
+    Code code;
     // Bitvectors
     std::vector<bool> reachable, visited, boundary;
 
     std::vector<std::tuple<uint32_t, uint32_t>> occurencies;
     std::vector<std::tuple<uint32_t, uint32_t>> double_occurencies;
 
-    Analyser(Result res)
+    Analyser(Result res) : code(Code(res.code, res.code_size)), result(res)
     {
-        result = res;
         reachable.resize(res.code_size, false);
         visited.resize(res.code_size, false);
         boundary.resize(res.code_size, false);
@@ -1546,89 +1582,60 @@ struct Analyser
 
     void mark_instructions()
     {
+        std::vector<int32_t> stack;
+
         for (int i = 0; i < result.header.pubs_length; i++)
         {
             assert(result.pubs[i].b >= 0 && result.pubs[i].b < result.code_size, "Public symbol points outside of code");
-            reachable[i] = true;
+            stack.push_back(i);
         }
 
-        bool has_reachable;
-        do
+        for (; stack.size() != 0;)
         {
-            has_reachable = false;
-            for (int32_t i = 0; i < result.code_size;)
+            auto cur = code.get_by_id(stack.back());
+            stack.pop_back();
+            while (cur != nullptr)
             {
-                if (!reachable[i] || visited[i])
+                auto cur_id = code.to_id(cur);
+                if (visited[cur_id])
                 {
-                    i++;
-                    continue;
+                    break;
                 }
-                has_reachable = true;
-                visited[i] = true;
-                Instruction *cur = reinterpret_cast<Instruction *>(result.code + i);
-
-                if (i + cur->size() > result.code_size)
-                {
-                    goto LOOP_END;
-                }
+                reachable[cur_id] = true;
+                visited[cur_id] = true;
 
                 switch (cur->tag)
                 {
                 case instr::JMP:
-                    boundary[i] = true;
-                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to jump outside of code");
-                    reachable[cur->args[0]] = true;
-                    i = cur->args[0];
+                    boundary[cur_id] = true;
+                    boundary[cur->args[0]] = true;
+                    cur = code.get_by_id(cur->args[0]);
                     // Skip default next iter
                     continue;
                 case instr::END:
                 case instr::RET:
-                    boundary[i] = true;
-                    goto LOOP_END;
+                    boundary[cur_id] = true;
+                    cur = nullptr;
+                    continue;
+                case instr::CALL:
                 case instr::CJMPZ:
                 case instr::CJMPNZ:
-                case instr::CALL:
-                    boundary[i] = true;
-                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to jump outside of code");
-                    reachable[cur->args[0]] = true;
-                    break;
-                case instr::BEGIN:
-                case instr::CBEGIN:
-                    if (i > 0)
-                    {
-                        boundary[i - 1] = true;
-                    }
-                    break;
                 case instr::CLOSURE:
-                    assert_with_ip(cur->args[0] >= 0 && cur->args[0] < result.code_size, i, "Tried to create closure outside of code");
-                    reachable[cur->args[0]] = true;
-                    break;
-                case instr::CALLC:
-                    boundary[i] = true;
+                    assert(cur->args[0] >= 0 && cur->args[0] < code.code_size, "Tried to create closure outside of code");
+                    stack.push_back(cur->args[0]);
                     break;
                 }
-                i += cur->size();
-                if (i < result.code_size)
-                {
-                    reachable[i] = true;
-                }
+                cur = code.get_next(cur);
             }
-        LOOP_END:
-        } while (has_reachable);
+        }
     }
 
     void add_instr(Instruction *_inst)
     {
         for (int32_t i = 0; i < occurencies.size(); i++)
         {
-            auto _inst2 = reinterpret_cast<Instruction *>(result.code + std::get<0>(occurencies[i]));
-            auto size1 = _inst->size();
-            auto size2 = _inst2->size();
-            if (size1 != size2)
-            {
-                continue;
-            }
-            if (std::memcmp(_inst, _inst2, size1) != 0)
+            auto _inst2 = code.get_by_id(std::get<0>(occurencies[i]));
+            if (!(*_inst == *_inst2))
             {
                 continue;
             }
@@ -1642,23 +1649,11 @@ struct Analyser
     {
         for (int32_t i = 0; i < double_occurencies.size(); i++)
         {
-            auto _inst2 = reinterpret_cast<Instruction *>(result.code + std::get<0>(double_occurencies[i]));
+            auto _inst2 = code.get_by_id(std::get<0>(double_occurencies[i]));
+            auto _inst3 = code.get_next(_inst);
+            auto _inst4 = code.get_next(_inst2);
             auto size1 = _inst->size();
-            auto size2 = _inst2->size();
-            if (size1 != size2)
-            {
-                continue;
-            }
-            auto _inst3 = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(_inst) + size1);
-            auto _inst4 = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(_inst2) + size1);
-            auto size3 = _inst3->size();
-            auto size4 = _inst4->size();
-            if (size3 != size4)
-            {
-                continue;
-                ;
-            }
-            if (std::memcmp(_inst, _inst2, size1 + size3) != 0)
+            if (!(*_inst == *_inst2 && *_inst3 == *_inst4))
             {
                 continue;
             }
@@ -1671,16 +1666,12 @@ struct Analyser
     void count_occurencies()
     {
         Instruction *prev = nullptr;
-        for (int32_t i = 0; i < result.code_size;)
+        for (auto cur = code.get_by_id(0); cur != nullptr; cur = code.get_next(cur))
         {
-            Instruction *cur = reinterpret_cast<Instruction *>(result.code + i);
-            if (i + cur->size() > result.code_size)
+            auto cur_id = code.to_id(cur);
+            // std::cout << (reachable[cur_id] ? "* " : "  ") << *cur << "\n";
+            if (!reachable[cur_id])
             {
-                return;
-            }
-            if (!reachable[i])
-            {
-                i += 1;
                 prev = nullptr;
                 continue;
             }
@@ -1691,7 +1682,7 @@ struct Analyser
                 add_double_instr(prev);
             }
 
-            if (boundary[i])
+            if (boundary[cur_id])
             {
                 prev = nullptr;
             }
@@ -1699,7 +1690,6 @@ struct Analyser
             {
                 prev = cur;
             }
-            i += cur->size();
         }
     }
 
@@ -1724,14 +1714,14 @@ std::string to_hex_string(const std::vector<char> &vec)
     return oss.str();
 }
 
-void print_occurency(char *code, std::tuple<int32_t, int32_t> occ, int32_t size)
+void print_occurency(Code code, std::tuple<int32_t, int32_t> occ, int32_t size)
 {
     std::cout << std::get<1>(occ) << " ";
-    auto cur = reinterpret_cast<Instruction *>(code + std::get<0>(occ));
+    auto cur = code.get_by_id(std::get<0>(occ));
     for (int32_t i = 0; i < size - 1; i++)
     {
         std::cout << *cur << "; ";
-        cur = reinterpret_cast<Instruction *>(reinterpret_cast<char *>(cur) + cur->size());
+        cur = code.get_next(cur);
     }
     std::cout << *cur << "\n";
 }
@@ -1797,35 +1787,36 @@ int main(int argc, char **argv)
     }
     case mode::ANALYSE:
     {
+        Code code = Code(result.code, result.code_size);
         Analyser a = Analyser(result);
         a.analyse();
 
         std::cout << "Instructions sorted by occurencies:\n";
 
-        for (int32_t i = 0, j = 0; i < a.occurencies.size() && j < a.double_occurencies.size();)
+        for (int32_t i = 0, j = 0; i < a.occurencies.size() || j < a.double_occurencies.size();)
         {
             if (i >= a.occurencies.size())
             {
                 auto occ = a.double_occurencies[j++];
-                print_occurency(result.code, occ, 2);
+                print_occurency(code, occ, 2);
                 continue;
             }
             if (j >= a.double_occurencies.size())
             {
                 auto occ = a.occurencies[i++];
-                print_occurency(result.code, occ, 1);
+                print_occurency(code, occ, 1);
                 continue;
             }
             auto occ1 = a.occurencies[i];
             auto occ2 = a.double_occurencies[j];
             if (std::get<1>(occ1) > std::get<1>(occ2))
             {
-                print_occurency(result.code, occ1, 1);
+                print_occurency(code, occ1, 1);
                 i++;
             }
             else
             {
-                print_occurency(result.code, occ2, 2);
+                print_occurency(code, occ2, 2);
                 j++;
             }
         }
