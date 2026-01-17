@@ -5,10 +5,10 @@ make
 ./interpreter [bytecode]
 ```
 
-for analysis use flag `-a`
+for analysis use analyser binary
 
 ```
-./interpreter -a [bytecode]
+./analyser [bytecode]
 ```
 
 # Comparsion
