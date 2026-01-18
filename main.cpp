@@ -986,127 +986,60 @@ struct Block
 
 struct Verifier
 {
-    struct Borders
-    {
-        int32_t start_offset, end_offset;
-        Instruction *header;
-    };
-
     Result res;
     Code code;
-    std::vector<Borders> borders;
 
     Verifier(Result res_) : res(res_), code(res.code, res.code_size) {}
 
-    void analyse_borders()
-    {
-        Borders cur_borders;
-        bool is_function = false;
-        auto cur = code.get_by_id(0);
-        while (cur != nullptr)
-        {
-            switch (cur->tag)
-            {
-            case instr::BEGIN:
-            case instr::CBEGIN:
-                assert_with_ip(!is_function, code.to_id(cur), "Expected function end");
-                cur_borders.start_offset = code.to_id(cur);
-                cur_borders.header = cur;
-                is_function = true;
-                break;
-            case instr::END:
-                assert_with_ip(is_function, code.to_id(cur), "Unexpected function end");
-                cur_borders.end_offset = code.to_id(cur);
-                borders.push_back(cur_borders);
-                is_function = false;
-                break;
-            default:
-                break;
-            }
-            cur = code.get_next(cur);
-        }
-    }
     void verify()
     {
-        analyse_borders();
-
         struct State
         {
             int32_t cur_id;
             int32_t cur_stack_size;
-            Borders cur_borders;
+            Instruction *cur_header;
         };
 
         std::vector<int32_t> stack_sizes;
         stack_sizes.resize(code.code_size, -1);
 
-        Borders cur_borders;
+        Instruction *cur_header;
         int32_t cur_stack_size = 0;
 
-        auto cur = code.get_by_id(0);
+        std::string entry_point = "main";
+        Instruction *cur = nullptr;
+        for (int32_t i = 0; i < res.header.pubs_length; i++) {
+            if (entry_point == res.st + res.pubs[i].a) {
+                cur = code.get_by_id(res.pubs[i].b);
+                break;
+            }
+        }
+        assert(cur != nullptr, "Can't find entry point");
 
         std::vector<State> stack;
-        std::vector<bool> visited;
-        visited.resize(code.code_size, false);
-
-        for (int32_t i = 0; i < borders.size(); i++)
-        {
-            stack.push_back({
-                .cur_id = code.to_id(borders[i].header),
-                .cur_stack_size = 0,
-                .cur_borders = borders[i],
-            });
-        }
 
         for (; stack.size() != 0;)
         {
             auto cur = code.get_by_id(stack.back().cur_id);
             cur_stack_size = stack.back().cur_stack_size;
-            cur_borders = stack.back().cur_borders;
+            cur_header = stack.back().cur_header;
             stack.pop_back();
             while (cur != nullptr)
             {
                 auto cur_id = code.to_id(cur);
-                if (visited[cur_id])
-                {
-                    break;
-                }
-                visited[cur_id] = true;
-
-                // TODO: Remove
-                auto dump_state = [&]()
-                {
-                    auto cur = code.get_by_id(0);
-                    while (cur != nullptr)
-                    {
-                        auto cur_id = code.to_id(cur);
-                        std::cout << (visited[cur_id] ? "* " : "  ")
-                                  << stack_sizes[cur_id] << " "
-                                  << std::hex << cur_id << std::dec << " "
-                                  << *cur << "\n";
-                        cur = code.get_next(cur);
-                    }
-                };
-                if (!(stack_sizes[cur_id] < 0 || cur_stack_size == stack_sizes[cur_id]))
-                {
-                    dump_state();
-                }
-
                 assert_with_ip(stack_sizes[cur_id] < 0 || cur_stack_size == stack_sizes[cur_id] || cur->tag == instr::END || cur->tag == instr::RET, cur_id, "Stack sizes don't match");
                 stack_sizes[cur_id] = cur_stack_size;
 
-                if (!(cur_stack_size >= cur->get_popped()))
-                    dump_state();
                 assert_with_ip(cur_stack_size >= cur->get_popped(), cur_id, "Insufficient stack size for operation");
                 cur_stack_size += cur->get_diff();
 
-                auto m = cur_borders.header->args[1] >> 16;
-                auto locs = cur_borders.header->args[1] & 0xFFFF;
-                cur_borders.header->args[1] = locs | (std::max(m, cur_stack_size) << 16);
+                auto m = cur_header->args[1] >> 16;
+                auto locs = cur_header->args[1] & 0xFFFF;
+                cur_header->args[1] = locs | (std::max(m, cur_stack_size) << 16);
 
-                auto check_jump = [&](int32_t l)
+                auto check_next_jump = [&](int32_t l)
                 {
-                    assert_with_ip(l >= cur_borders.start_offset && l <= cur_borders.end_offset, cur_id, "Tried to jump outside of function block");
+                    assert_with_ip(l >= 0 && l <= code.code_size, cur_id, "Tried to jump outside of function block");
                     if (stack_sizes[l] >= 0)
                     {
                         auto then = code.get_by_id(l);
@@ -1115,27 +1048,42 @@ struct Verifier
                     else
                     {
                         stack_sizes[l] = cur_stack_size;
+                        cur = code.get_by_id(l);
                     }
-                    return l;
                 };
 
-                auto find_borders = [&](int32_t l) {
-                    for (int32_t i = 0; i < borders.size(); i++)
+                auto check_push_jump = [&](int32_t l)
+                {
+                    assert_with_ip(l >= 0 && l <= code.code_size, cur_id, "Tried to jump outside of function block");
+                    if (stack_sizes[l] >= 0)
                     {
-                        if (borders[i].start_offset == l)
-                        {
-                            return i;
-                        }
+                        auto then = code.get_by_id(l);
+                        assert_with_ip(stack_sizes[l] == cur_stack_size || then->tag == instr::END || then->tag == instr::RET, cur_id, "Stack sizes don't match");
                     }
-                    return -1;
+                    else
+                    {
+                        stack_sizes[l] = cur_stack_size;
+                        stack.push_back({
+                            .cur_id = l,
+                            .cur_stack_size = cur_stack_size,
+                            .cur_header = cur_header,
+                        });
+                    }
                 };
 
-                auto check_call = [&](int32_t l)
+                auto check_push_call = [&](int32_t l)
                 {
                     assert_with_ip(l >= 0 && l < code.code_size, cur_id, "Tried to call function outside of code");
-                    auto b_id = find_borders(l);
-                    assert_with_ip(b_id >= 0, cur_id, "Tried to call unknown function");
-                    return l;
+                    auto header = code.get_by_id(l);
+                    assert_with_ip(header->tag == instr::BEGIN || header->tag == instr::CBEGIN, cur_id, "Tried to call not a function");
+                    if (stack_sizes[l] < 0) {
+                        stack_sizes[l] = 0;
+                        stack.push_back({
+                            .cur_id = l,
+                            .cur_stack_size = cur_stack_size,
+                            .cur_header = header,
+                        });
+                    }
                 };
 
                 auto check_access = [&](Instruction::CArg::CArgType typ, int32_t a)
@@ -1146,12 +1094,10 @@ struct Verifier
                         assert_with_ip(a >= 0 && a < res.header.globals_length, cur_id, "Trying to access invalid global");
                         return;
                     case Instruction::CArg::L:
-                        if (!(a >= 0 && a < locs))
-                            dump_state();
                         assert_with_ip(a >= 0 && a < locs, cur_id, "Trying to access invalid local");
                         return;
                     case Instruction::CArg::A:
-                        assert_with_ip(a >= 0 && a < cur_borders.header->args[0], cur_id, "Trying to access invalid argument");
+                        assert_with_ip(a >= 0 && a < cur_header->args[0], cur_id, "Trying to access invalid argument");
                         return;
                     case Instruction::CArg::C:
                         // NOTE: We can't check closure args _now_
@@ -1175,7 +1121,7 @@ struct Verifier
                     cur_stack_size = 0;
                     break;
                 case instr::JMP:
-                    cur = code.get_by_id(check_jump(cur->args[0]));
+                    check_next_jump(cur->args[0]);
                     // Skip default next iter
                     continue;
                 case instr::END:
@@ -1184,26 +1130,14 @@ struct Verifier
                     cur = nullptr;
                     continue;
                 case instr::CALL:
-                    stack.push_back({
-                        .cur_id = check_call(cur->args[0]),
-                        .cur_stack_size = cur_stack_size,
-                        .cur_borders = borders[find_borders(cur->args[0])],
-                    });
+                    check_push_call(cur->args[0]);
                     break;
                 case instr::CJMPZ:
                 case instr::CJMPNZ:
-                    stack.push_back({
-                        .cur_id = check_jump(cur->args[0]),
-                        .cur_stack_size = cur_stack_size,
-                        .cur_borders = cur_borders,
-                    });
+                    check_push_jump(cur->args[0]);
                     break;
                 case instr::CLOSURE:
-                    stack.push_back({
-                        .cur_id = check_call(cur->args[0]),
-                        .cur_stack_size = cur_stack_size,
-                        .cur_borders = borders[find_borders(cur->args[0])],
-                    });
+                    check_push_call(cur->args[0]);
                     for (int32_t i = 0; i < cur->args[1]; i++)
                     {
                         check_access(cur->cargs[i].tag, cur->cargs[i].arg);
@@ -1233,6 +1167,15 @@ struct Verifier
                     break;
                 }
                 cur = code.get_next(cur);
+
+                if (cur != nullptr) {
+                    cur_id = code.to_id(cur);
+                    assert_with_ip(stack_sizes[cur_id] < 0 || cur_stack_size == stack_sizes[cur_id] || cur->tag == instr::END || cur->tag == instr::RET, cur_id, "Stack sizes don't match");
+                    if (stack_sizes[cur_id] >= 0)
+                    {
+                        break;
+                    }
+                }
             }
         }
     }
