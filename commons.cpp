@@ -589,6 +589,16 @@ Instruction *Code::get_next(Instruction *_ins) const
     return get_by_id(id + _ins->size());
 }
 
+Instruction *Code::get_next_inc(Instruction *_ins) const
+{
+    auto id = to_id(_ins);
+    if (id + 1 >= code_size)
+    {
+        return nullptr;
+    }
+    return get_by_id(id + 1);
+}
+
 std::ostream &operator<<(std::ostream &os, const Instruction &_ins)
 {
     os << _ins.get_tag_name();

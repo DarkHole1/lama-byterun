@@ -158,6 +158,7 @@ struct Code
     int32_t to_id(Instruction *_ins) const;
 
     Instruction *get_next(Instruction *_ins) const;
+    Instruction *get_next_inc(Instruction *_ins) const;
 
     Code(char *code_, int32_t size) : code(code_), code_size(size) {}
 };

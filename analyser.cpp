@@ -12,14 +12,13 @@ struct Analyser
     Result result;
     Code code;
     // Bitvectors
-    std::vector<bool> reachable, visited, boundary;
+    std::vector<bool> visited, boundary;
 
     std::vector<std::tuple<uint32_t, uint32_t>> occurencies;
     std::vector<std::tuple<uint32_t, uint32_t>> double_occurencies;
 
-    Analyser(Result res) : code(Code(res.code, res.code_size)), result(res)
+    Analyser(Result res) : result(res), code(Code(res.code, res.code_size))
     {
-        reachable.resize(res.code_size, false);
         visited.resize(res.code_size, false);
         boundary.resize(res.code_size, false);
     }
@@ -46,7 +45,13 @@ struct Analyser
         for (int i = 0; i < result.header.pubs_length; i++)
         {
             assert(result.pubs[i].b >= 0 && result.pubs[i].b < result.code_size, "Public symbol points outside of code");
+            if (visited[result.pubs[i].b])
+            {
+                continue;
+            }
             stack.push_back(i);
+            visited[result.pubs[i].b] = true;
+            boundary[result.pubs[i].b] = true;
         }
 
         for (; stack.size() != 0;)
@@ -56,12 +61,6 @@ struct Analyser
             while (cur != nullptr)
             {
                 auto cur_id = code.to_id(cur);
-                if (visited[cur_id])
-                {
-                    break;
-                }
-                reachable[cur_id] = true;
-                visited[cur_id] = true;
 
                 switch (cur->tag)
                 {
@@ -69,8 +68,7 @@ struct Analyser
                     boundary[cur_id] = true;
                     boundary[cur->args[0]] = true;
                     cur = code.get_by_id(cur->args[0]);
-                    // Skip default next iter
-                    continue;
+                    goto CHECK_NEXT;
                 case instr::END:
                 case instr::RET:
                 case instr::FAIL:
@@ -81,13 +79,32 @@ struct Analyser
                 case instr::CJMPZ:
                 case instr::CJMPNZ:
                 case instr::CLOSURE:
+                {
                     assert(cur->args[0] >= 0 && cur->args[0] < code.code_size, "Tried to create closure outside of code");
-                    stack.push_back(cur->args[0]);
+                    auto jmp = cur->args[0];
+                    if (!visited[jmp])
+                    {
+                        stack.push_back(jmp);
+                        visited[jmp] = true;
+                    }
                     break;
+                }
                 default:
                     break;
                 }
+
                 cur = code.get_next(cur);
+
+            CHECK_NEXT:
+                if (cur != nullptr)
+                {
+                    cur_id = code.to_id(cur);
+                    if (visited[cur_id])
+                    {
+                        break;
+                    }
+                    visited[cur_id] = true;
+                }
             }
         }
     }
@@ -128,13 +145,14 @@ struct Analyser
     void count_occurencies()
     {
         Instruction *prev = nullptr;
-        for (auto cur = code.get_by_id(0); cur != nullptr; cur = code.get_next(cur))
+        for (auto cur = code.get_by_id(0); cur != nullptr;)
         {
             auto cur_id = code.to_id(cur);
             // std::cout << (reachable[cur_id] ? "* " : "  ") << *cur << "\n";
-            if (!reachable[cur_id])
+            if (!visited[cur_id])
             {
                 prev = nullptr;
+                cur = code.get_next_inc(cur);
                 continue;
             }
 
@@ -152,6 +170,7 @@ struct Analyser
             {
                 prev = cur;
             }
+            cur = code.get_next(cur);
         }
     }
 
