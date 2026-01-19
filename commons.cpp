@@ -392,6 +392,10 @@ bool Instruction::operator==(const Instruction &other) const
     return memcmp(this, &other, size()) == 0;
 }
 
+int Instruction::cmp(const Instruction *other) const {
+    return memcmp(this, other, size());
+}
+
 int32_t Instruction::get_popped()
 {
     switch (tag)

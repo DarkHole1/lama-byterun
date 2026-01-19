@@ -15,10 +15,10 @@ struct Analyser
     // Bitvectors
     std::vector<bool> visited, boundary;
 
-    std::vector<std::tuple<uint32_t, uint32_t>> occurencies_v;
-    std::vector<std::tuple<uint32_t, uint32_t>> double_occurencies_v;
-    std::unordered_map<std::string_view, int32_t> occurencies;
-    std::unordered_map<std::string_view, int32_t> double_occurencies;
+    std::vector<int32_t> occurencies;
+    std::vector<int32_t> double_occurencies;
+    std::vector<std::tuple<int32_t, int32_t>> occurencies_u;
+    std::vector<std::tuple<int32_t, int32_t>> double_occurencies_u;
 
     Analyser(Result res) : result(res), code(Code(res.code, res.code_size))
     {
@@ -28,30 +28,94 @@ struct Analyser
 
     void sort_occurencies()
     {
-        occurencies_v.reserve(occurencies.size());
-        double_occurencies_v.reserve(double_occurencies.size());
+        std::sort(occurencies.begin(), occurencies.end(),
+                  [this](const auto &a, const auto &b)
+                  {
+                      return code.get_by_id(b)->cmp(code.get_by_id(a)) < 0;
+                  });
 
-        for (const auto &pair : occurencies)
+        std::sort(double_occurencies.begin(), double_occurencies.end(),
+                  [this](const auto &a, const auto &b)
+                  {
+                      auto a_ = code.get_by_id(a);
+                      auto b_ = code.get_by_id(b);
+                      auto res = b_->cmp(a_);
+                      if (res == 0)
+                      {
+                          return code.get_next(b_)->cmp(code.get_next(a_)) < 0;
+                      }
+                      return res < 0;
+                  });
+
+        int32_t uniq1 = 1;
+        int32_t uniq2 = 1;
+
+        for (int32_t i = 1; i < occurencies.size(); i++)
         {
-            occurencies_v.emplace_back(
-                code.to_id(code.get_by_string_view(pair.first)),
-                pair.second);
+            if (code.get_by_id(occurencies[i - 1])->cmp(code.get_by_id(occurencies[i])) != 0)
+            {
+                uniq1 += 1;
+            }
         }
 
-        for (const auto &pair : double_occurencies)
+        for (int32_t i = 1; i < double_occurencies.size(); i++)
         {
-            double_occurencies_v.emplace_back(
-                code.to_id(code.get_by_string_view(pair.first)),
-                pair.second);
+            auto a_ = code.get_by_id(double_occurencies[i - 1]);
+            auto b_ = code.get_by_id(double_occurencies[i]);
+            if (a_->cmp(b_) != 0 || code.get_next(a_)->cmp(code.get_next(b_)) != 0)
+            {
+                uniq2 += 1;
+            }
         }
 
-        std::sort(occurencies_v.begin(), occurencies_v.end(),
+        occurencies_u.reserve(uniq1);
+        double_occurencies_u.reserve(uniq2);
+
+        if (occurencies.size() > 0)
+        {
+            occurencies_u.emplace_back(occurencies[0], 1);
+
+            for (int32_t i = 1; i < occurencies.size(); i++)
+            {
+                if (code.get_by_id(occurencies[i - 1])->cmp(code.get_by_id(occurencies[i])) != 0)
+                {
+                    occurencies_u.emplace_back(occurencies[i], 1);
+                }
+                else
+                {
+                    auto c = occurencies_u[occurencies_u.size() - 1];
+                    occurencies_u[occurencies_u.size() - 1] = std::tuple(std::get<0>(c), std::get<1>(c) + 1);
+                }
+            }
+        }
+
+        if (double_occurencies.size() > 0)
+        {
+            double_occurencies_u.emplace_back(double_occurencies[0], 1);
+
+            for (int32_t i = 1; i < double_occurencies.size(); i++)
+            {
+                auto a_ = code.get_by_id(double_occurencies[i - 1]);
+                auto b_ = code.get_by_id(double_occurencies[i]);
+                if (a_->cmp(b_) != 0 || code.get_next(a_)->cmp(code.get_next(b_)) != 0)
+                {
+                    double_occurencies_u.emplace_back(double_occurencies[i], 1);
+                }
+                else
+                {
+                    auto c = double_occurencies_u[double_occurencies_u.size() - 1];
+                    double_occurencies_u[double_occurencies_u.size() - 1] = std::tuple(std::get<0>(c), std::get<1>(c) + 1);
+                }
+            }
+        }
+
+        std::sort(occurencies_u.begin(), occurencies_u.end(),
                   [](const auto &a, const auto &b)
                   {
                       return std::get<1>(a) > std::get<1>(b);
                   });
 
-        std::sort(double_occurencies_v.begin(), double_occurencies_v.end(),
+        std::sort(double_occurencies_u.begin(), double_occurencies_u.end(),
                   [](const auto &a, const auto &b)
                   {
                       return std::get<1>(a) > std::get<1>(b);
@@ -157,12 +221,12 @@ struct Analyser
 
     void add_instr(Instruction *_inst)
     {
-        occurencies[code.to_string_view(_inst, 1)]++;
+        occurencies.push_back(code.to_id(_inst));
     }
 
     void add_double_instr(Instruction *_inst)
     {
-        double_occurencies[code.to_string_view(_inst, 2)]++;
+        double_occurencies.push_back(code.to_id(_inst));
     }
 
     void count_occurencies()
@@ -236,22 +300,22 @@ int main(int argc, char **argv)
 
     std::cout << "Instructions sorted by occurencies:\n";
 
-    for (int32_t i = 0, j = 0; i < a.occurencies_v.size() || j < a.double_occurencies_v.size();)
+    for (int32_t i = 0, j = 0; i < a.occurencies_u.size() || j < a.double_occurencies_u.size();)
     {
-        if (i >= a.occurencies.size())
+        if (i >= a.occurencies_u.size())
         {
-            auto occ = a.double_occurencies_v[j++];
+            auto occ = a.double_occurencies_u[j++];
             print_occurency(code, occ, 2);
             continue;
         }
-        if (j >= a.double_occurencies.size())
+        if (j >= a.double_occurencies_u.size())
         {
-            auto occ = a.occurencies_v[i++];
+            auto occ = a.occurencies_u[i++];
             print_occurency(code, occ, 1);
             continue;
         }
-        auto occ1 = a.occurencies_v[i];
-        auto occ2 = a.double_occurencies_v[j];
+        auto occ1 = a.occurencies_u[i];
+        auto occ2 = a.double_occurencies_u[j];
         if (std::get<1>(occ1) > std::get<1>(occ2))
         {
             print_occurency(code, occ1, 1);

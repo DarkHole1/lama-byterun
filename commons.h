@@ -140,6 +140,8 @@ struct Instruction
 
     bool operator==(const Instruction &other) const;
 
+    int cmp(const Instruction *other) const;
+
     int32_t get_popped();
 
     int32_t get_pushed();
