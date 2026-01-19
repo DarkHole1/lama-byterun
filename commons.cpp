@@ -572,14 +572,37 @@ Instruction *Code::get_by_id(int32_t id) const
     return reinterpret_cast<Instruction *>(code + id);
 }
 
-int32_t Code::to_id(Instruction *_ins) const
+const Instruction *Code::get_by_string_view(std::string_view sw) const
 {
-    auto res = reinterpret_cast<char *>(_ins) - code;
+    // TODO: Check ptr in code range
+    return reinterpret_cast<const Instruction *>(sw.data());
+};
+
+int32_t Code::to_id(const Instruction *_ins) const
+{
+    auto res = reinterpret_cast<const char *>(_ins) - code;
     assert(res >= 0 && res < code_size, "Tried to get id outside of code");
     return res;
 }
 
-Instruction *Code::get_next(Instruction *_ins) const
+std::string_view Code::to_string_view(const Instruction *_ins, int32_t lookahead) const
+{
+    int32_t size = _ins->size();
+    const Instruction *cur = _ins;
+    for (int32_t i = 1; i < lookahead; i++)
+    {
+        cur = get_next(_ins);
+        if (cur == nullptr)
+        {
+            return nullptr;
+        }
+        size += cur->size();
+    }
+
+    return std::string_view(reinterpret_cast<const char *>(_ins), size);
+};
+
+Instruction *Code::get_next(const Instruction *_ins) const
 {
     auto id = to_id(_ins);
     if (id + _ins->size() >= code_size)

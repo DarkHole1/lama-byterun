@@ -154,10 +154,12 @@ struct Code
     int32_t code_size;
 
     Instruction *get_by_id(int32_t id) const;
+    const Instruction *get_by_string_view(std::string_view sw) const;
 
-    int32_t to_id(Instruction *_ins) const;
+    int32_t to_id(const Instruction *_ins) const;
+    std::string_view to_string_view(const Instruction *_ins, int32_t lookahead) const;
 
-    Instruction *get_next(Instruction *_ins) const;
+    Instruction *get_next(const Instruction *_ins) const;
     Instruction *get_next_inc(Instruction *_ins) const;
 
     Code(char *code_, int32_t size) : code(code_), code_size(size) {}
